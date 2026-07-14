@@ -130,32 +130,180 @@ exports.createBill = async (req, res) => {
 // ═══════════════════════════════════════════════
 // GET /api/bills  — List bills for vendor
 // ═══════════════════════════════════════════════
+// exports.getBills = async (req, res) => {
+//   try {
+//     const { q, status, from, to, page = 1, limit = 20 } = req.query;
+//     const filter = { vendorId: req.user.vendorId };
+
+//     if (status) filter.status = status;
+
+//     if (from || to) {
+//       filter.billingDate = {};
+//       if (from) filter.billingDate.$gte = new Date(from);
+//       if (to) filter.billingDate.$lte = new Date(new Date(to).setHours(23, 59, 59));
+//     }
+
+//     if (q) {
+//       const regex = new RegExp(q.trim(), "i");
+//       filter.$or = [{ billNumber: regex }, { patientId: regex }];
+//     }
+
+//     const bills = await Bill.find(filter)
+//       .populate("patient", "firstName lastName phone age gender designation ageType patientId referringDoctor")
+//       .sort({ createdAt: -1 })
+//       .skip((page - 1) * limit)
+//       .limit(Number(limit));
+//     const total = await Bill.countDocuments(filter);
+
+//     return res.status(200).json({ bills, total });
+//   } catch (err) {
+//     console.error("getBills error:", err);
+//     res.status(500).json({ message: "Server error." });
+//   }
+// };
+
+// ═══════════════════════════════════════════════
+// GET /api/bills  — List bills for vendor
+//
+// Query params:
+//   q             free-text search (bill no, patient ID/name/phone,
+//                 test name, referring doctor)
+//   status        workflow status filter (pending/processing/completed/cancelled)
+//   paymentStatus NEW — payment status filter (paid/due/partial)
+//   from, to      billingDate range
+//   page, limit   pagination
+//
+// Response:
+//   { bills, hasMore, totals, paymentCounts }
+//   totals/paymentCounts are computed across the FULL filtered set
+//   (not just the current page) via a single aggregation with $facet.
+// ═══════════════════════════════════════════════
 exports.getBills = async (req, res) => {
   try {
-    const { q, status, from, to, page = 1, limit = 20 } = req.query;
-    const filter = { vendorId: req.user.vendorId };
+    const {
+      q,
+      status,
+      paymentStatus,
+      from, to,
+      page = 1,
+      limit = 20,
+    } = req.query;
 
-    if (status) filter.status = status;
+    const vendorId = req.user.vendorId;
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Number(limit));
+
+    const match = { vendorId };
+    if (status) match.status = status;
 
     if (from || to) {
-      filter.billingDate = {};
-      if (from) filter.billingDate.$gte = new Date(from);
-      if (to) filter.billingDate.$lte = new Date(new Date(to).setHours(23, 59, 59));
+      match.billingDate = {};
+      if (from) match.billingDate.$gte = new Date(from);
+      if (to) match.billingDate.$lte = new Date(new Date(to).setHours(23, 59, 59, 999));
     }
+
+    // ── Base pipeline: filter → join patient (for name/phone search) →
+    //    derive paymentStatus so it can be filtered/grouped on ────────
+    const basePipeline = [
+      { $match: match },
+      {
+        $lookup: {
+          from: "patients", // confirm this matches your Patient model's actual collection name
+          localField: "patient",
+          foreignField: "_id",
+          as: "patientDoc",
+        },
+      },
+      { $unwind: { path: "$patientDoc", preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          paymentStatus: {
+            $cond: [
+              { $lte: ["$dueAmount", 0] },
+              "paid",
+              { $cond: [{ $lte: ["$amountPaid", 0] }, "due", "partial"] },
+            ],
+          },
+        },
+      },
+    ];
 
     if (q) {
       const regex = new RegExp(q.trim(), "i");
-      filter.$or = [{ billNumber: regex }, { patientId: regex }];
+      basePipeline.push({
+        $match: {
+          $or: [
+            { billNumber: regex },
+            { patientId: regex },
+            { referringDoctorName: regex },
+            { "items.testName": regex },
+            { "patientDoc.firstName": regex },
+            { "patientDoc.lastName": regex },
+            { "patientDoc.phone": regex },
+          ],
+        },
+      });
     }
 
-    const bills = await Bill.find(filter)
-      .populate("patient", "firstName lastName phone age gender designation ageType patientId referringDoctor")
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(Number(limit));
-    const total = await Bill.countDocuments(filter);
+    const paymentStatusStage = paymentStatus ? [{ $match: { paymentStatus } }] : [];
 
-    return res.status(200).json({ bills, total });
+    const [result] = await Bill.aggregate([
+      ...basePipeline,
+      {
+        $facet: {
+          // ── Current page — extra +1 doc fetched to know hasMore cheaply
+          data: [
+            ...paymentStatusStage,
+            { $sort: { createdAt: -1 } },
+            { $skip: (pageNum - 1) * limitNum },
+            { $limit: limitNum + 1 },
+          ],
+          // ── Sums across the FULL filtered set (respects paymentStatus)
+          totals: [
+            ...paymentStatusStage,
+            {
+              $group: {
+                _id: null,
+                amount: { $sum: "$subtotal" },
+                paid: { $sum: "$amountPaid" },
+                due: { $sum: "$dueAmount" },
+                discount: { $sum: "$totalDiscount" },
+                net: { $sum: "$grandTotal" },
+                count: { $sum: 1 },
+              },
+            },
+          ],
+          // ── Counts per payment status — deliberately does NOT apply
+          //    paymentStatusStage, so the filter pills always show counts
+          //    for all statuses within the current search/date range.
+          paymentCounts: [
+            {
+              $group: {
+                _id: null,
+                paid: { $sum: { $cond: [{ $eq: ["$paymentStatus", "paid"] }, 1, 0] } },
+                due: { $sum: { $cond: [{ $eq: ["$paymentStatus", "due"] }, 1, 0] } },
+                partial: { $sum: { $cond: [{ $eq: ["$paymentStatus", "partial"] }, 1, 0] } },
+                all: { $sum: 1 },
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    const rawData = result?.data || [];
+    const hasMore = rawData.length > limitNum;
+    const bills = (hasMore ? rawData.slice(0, limitNum) : rawData).map((b) => {
+      const { patientDoc, ...rest } = b;
+      return { ...rest, patient: patientDoc || null };
+    });
+
+    return res.status(200).json({
+      bills,
+      hasMore,
+      totals: result?.totals?.[0] || { amount: 0, paid: 0, due: 0, discount: 0, net: 0, count: 0 },
+      paymentCounts: result?.paymentCounts?.[0] || { paid: 0, due: 0, partial: 0, all: 0 },
+    });
   } catch (err) {
     console.error("getBills error:", err);
     res.status(500).json({ message: "Server error." });
