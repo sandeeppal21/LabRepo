@@ -1,14 +1,35 @@
 /**
  * BillRegistration.jsx
- * Changes from previous version:
- *  ✅ Referring Doctor is now a searchable dropdown
- *  ✅ Fetches doctors from /api/referrals?category=doctor on mount
- *  ✅ Saves referringDoctorId (ObjectId) + referringDoctorName to patient
- *  ✅ Dropdown shows name + degree + commission info
- *  ✅ Clears on reset
+ *
+ * Optimization pass over the previous version. Same three components
+ * (QuickAddDoctorModal, ReferralDoctorDropdown, BillingModal, and the
+ * default-exported BillRegistration) — nothing was split into new files,
+ * per request. Changes are flagged inline with FIX: / OPT: comments so
+ * they're easy to find when you do split this up later.
+ *
+ * Summary of what changed:
+ *  FIX: `catch { ... err }` in the vendor profile fetch referenced an
+ *       undefined `err` — now `catch (err)`.
+ *  OPT: Label / FieldErr / Toast wrapped in React.memo — they re-rendered
+ *       on every keystroke of every unrelated field before.
+ *  OPT: Inline style-object factories (`inp`, `inpCls`) hoisted to module
+ *       scope instead of being redefined inside component bodies on every
+ *       render.
+ *  OPT: Doctor filtering (search-in-dropdown) and test filtering
+ *       (search-in-billing) moved to useMemo instead of recomputing on
+ *       every render / doing an extra useEffect+setState round trip.
+ *  OPT: Billing totals (subtotal/discount/grandTotal/due) moved to
+ *       useMemo so they aren't recalculated when unrelated state
+ *       (e.g. notes, dispatch method) changes.
+ *  OPT: Event handlers passed to lists/children wrapped in useCallback so
+ *       memoized children don't re-render needlessly.
+ *  OPT: Related discount fields (`discountPct`, `discountAmt`,
+ *       `discountReason`) consolidated into one state object instead of
+ *       three separate useState calls — cuts hook count and gives one
+ *       update path.
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 import {
     RiUserAddLine, RiCloseLine, RiSearchLine,
     RiDeleteBinLine, RiPrinterLine, RiLoader4Line,
@@ -33,8 +54,17 @@ const GENDERS = ["male", "female", "other"];
 const AGE_TYPES = ["year", "month", "day"];
 const DISPATCH_OPTS = ["hardcopy", "email", "whatsapp", "online"];
 const PAYMENT_MODES = ["cash", "upi", "card", "due"];
+const EMPTY_FORM = {
+    designation: "MR.", firstName: "", lastName: "",
+    gender: "male", age: "", ageType: "year",
+    phone: "", email: "", address: "", ownerName: "",
+};
+const EMPTY_DISCOUNT = { pct: 0, amt: 0, reason: "" };
 
-// ── Shared helpers ─────────────────────────────────────────────
+// ── Shared style helpers ──────────────────────────────────────
+// OPT: these used to be re-declared as closures inside component bodies
+// (e.g. `inp` inside QuickAddDoctorModal) — now they're plain module-level
+// functions, so no new function identity is allocated per render.
 const inpCls = (t, err) => ({
     width: "100%", background: t.inputBg,
     border: `1.5px solid ${err ? "rgba(239,68,68,0.5)" : t.accentRing}`,
@@ -43,18 +73,30 @@ const inpCls = (t, err) => ({
     fontFamily: "'DM Sans',sans-serif", outline: "none",
 });
 
-const Label = ({ text, t, required }) => (
-    <label style={{ fontSize: "0.68rem", fontWeight: 600, color: t.muted, letterSpacing: "0.08em", textTransform: "uppercase", display: "block", marginBottom: 5 }}>
-        {text}{required && <span style={{ color: "#ef4444", marginLeft: 2 }}>*</span>}
-    </label>
-);
+const quickAddInpCls = (t, hasErr) => ({
+    width: "100%", background: t.inputBg,
+    border: `1.5px solid ${hasErr ? "#ef4444" : t.accentRing}`,
+    borderRadius: 9, padding: "9px 12px", color: t.text,
+    fontSize: "0.85rem", fontFamily: "'DM Sans',sans-serif", outline: "none",
+});
 
-const FieldErr = ({ msg }) => msg
-    ? <p style={{ fontSize: "0.7rem", color: "#ef4444", marginTop: 3 }}>{msg}</p>
-    : null;
+// OPT: memoized — these render dozens of times per page (once per field)
+// and only need to update when their own props or the theme change.
+const Label = memo(function Label({ text, t, required }) {
+    return (
+        <label style={{ fontSize: "0.68rem", fontWeight: 600, color: t.muted, letterSpacing: "0.08em", textTransform: "uppercase", display: "block", marginBottom: 5 }}>
+            {text}{required && <span style={{ color: "#ef4444", marginLeft: 2 }}>*</span>}
+        </label>
+    );
+});
+
+const FieldErr = memo(function FieldErr({ msg }) {
+    if (!msg) return null;
+    return <p style={{ fontSize: "0.7rem", color: "#ef4444", marginTop: 3 }}>{msg}</p>;
+});
 
 // ── Toast ──────────────────────────────────────────────────────
-function Toast({ msg, type, onClose }) {
+const Toast = memo(function Toast({ msg, type, onClose }) {
     if (!msg) return null;
     const ok = type === "success";
     return (
@@ -66,21 +108,26 @@ function Toast({ msg, type, onClose }) {
             </button>
         </div>
     );
-}
+});
 
 // ══════════════════════════════════════════════════════════════
 // QUICK ADD DOCTOR MODAL
-// Opens inline when doctor not found in dropdown
 // ══════════════════════════════════════════════════════════════
-function QuickAddDoctorModal({ t, onClose, onAdded }) {
+const QuickAddDoctorModal = memo(function QuickAddDoctorModal({ t, onClose, onAdded }) {
     const [form, setForm] = useState({ name: "", phone: "", degree: "", commission: "" });
     const [errs, setErrs] = useState({});
     const [saving, setSaving] = useState(false);
     const [saveErr, setSaveErr] = useState("");
 
-    const setF = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErrs(e => ({ ...e, [k]: "" })); };
+    // OPT: useCallback so this stable identity doesn't force child inputs
+    // to re-bind onChange every render (matters less here since inputs
+    // are plain DOM elements, but keeps the pattern consistent and cheap).
+    const setF = useCallback((k, v) => {
+        setForm(f => ({ ...f, [k]: v }));
+        setErrs(e => ({ ...e, [k]: "" }));
+    }, []);
 
-    const validate = () => {
+    const validate = useCallback(() => {
         const e = {};
         if (!form.name.trim()) e.name = "Name is required";
         if (!form.phone.trim()) e.phone = "Phone is required";
@@ -88,9 +135,9 @@ function QuickAddDoctorModal({ t, onClose, onAdded }) {
         if (form.commission !== "" && (isNaN(form.commission) || +form.commission < 0 || +form.commission > 100))
             e.commission = "Must be 0–100";
         return e;
-    };
+    }, [form]);
 
-    const handleSave = async () => {
+    const handleSave = useCallback(async () => {
         const e = validate();
         if (Object.keys(e).length) { setErrs(e); return; }
         setSaving(true);
@@ -105,29 +152,24 @@ function QuickAddDoctorModal({ t, onClose, onAdded }) {
                 email: "",
                 b2b: "",
             });
-            // Pass newly created doctor back to dropdown
             const newDoc = res.data.data;
             onAdded({ id: newDoc._id.toString(), name: newDoc.name, degree: newDoc.degree || "" });
         } catch (err) {
+            // FIX: previously `err.response` was read outside any catch
+            // parameter scope in one branch of this file — kept correct
+            // here, but see the vendor-profile fetch below for the actual
+            // bug that existed in the original.
             setSaveErr(err.response?.data?.message || err.message);
         } finally {
             setSaving(false);
         }
-    };
-
-    const inp = (hasErr) => ({
-        width: "100%", background: t.inputBg,
-        border: `1.5px solid ${hasErr ? "#ef4444" : t.accentRing}`,
-        borderRadius: 9, padding: "9px 12px", color: t.text,
-        fontSize: "0.85rem", fontFamily: "'DM Sans',sans-serif", outline: "none",
-    });
+    }, [form, validate, onAdded]);
 
     return (
         <div style={{ position: "fixed", inset: 0, zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
             <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(6px)" }} />
             <div style={{ position: "relative", zIndex: 1, background: t.card, border: `1px solid ${t.border}`, borderRadius: 18, padding: 28, width: "100%", maxWidth: 420, boxShadow: "0 24px 60px rgba(0,0,0,0.35)" }}>
 
-                {/* Header */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                     <div>
                         <h3 className="playfair" style={{ fontSize: "1.1rem", fontWeight: 700, color: t.heading }}>
@@ -142,18 +184,14 @@ function QuickAddDoctorModal({ t, onClose, onAdded }) {
                     </button>
                 </div>
 
-                {/* Fields */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 13 }}>
-
-                    {/* Name */}
                     <div>
                         <Label text="Doctor / Clinic Name" t={t} required />
                         <input value={form.name} onChange={e => setF("name", e.target.value)}
-                            placeholder="e.g. DR. AMIT SINGH" style={inp(errs.name)} />
-                        {errs.name && <p style={{ fontSize: "0.7rem", color: "#ef4444", marginTop: 3 }}>{errs.name}</p>}
+                            placeholder="e.g. DR. AMIT SINGH" style={quickAddInpCls(t, errs.name)} />
+                        <FieldErr msg={errs.name} />
                     </div>
 
-                    {/* Phone */}
                     <div>
                         <Label text="Phone Number" t={t} required />
                         <div style={{ position: "relative" }}>
@@ -161,36 +199,33 @@ function QuickAddDoctorModal({ t, onClose, onAdded }) {
                             <input type="tel" maxLength={10} value={form.phone}
                                 onChange={e => setF("phone", e.target.value)}
                                 placeholder="10-digit number"
-                                style={{ ...inp(errs.phone), paddingLeft: 32 }} />
+                                style={{ ...quickAddInpCls(t, errs.phone), paddingLeft: 32 }} />
                         </div>
-                        {errs.phone && <p style={{ fontSize: "0.7rem", color: "#ef4444", marginTop: 3 }}>{errs.phone}</p>}
+                        <FieldErr msg={errs.phone} />
                     </div>
 
-                    {/* Degree + Commission side by side */}
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                         <div>
                             <Label text="Degree" t={t} />
                             <input value={form.degree} onChange={e => setF("degree", e.target.value)}
-                                placeholder="MBBS, MD…" style={inp(false)} />
+                                placeholder="MBBS, MD…" style={quickAddInpCls(t, false)} />
                         </div>
                         <div>
                             <Label text="Commission %" t={t} />
                             <input type="number" min="0" max="100" value={form.commission}
                                 onChange={e => setF("commission", e.target.value)}
-                                placeholder="0–100" style={inp(errs.commission)} />
-                            {errs.commission && <p style={{ fontSize: "0.7rem", color: "#ef4444", marginTop: 3 }}>{errs.commission}</p>}
+                                placeholder="0–100" style={quickAddInpCls(t, errs.commission)} />
+                            <FieldErr msg={errs.commission} />
                         </div>
                     </div>
                 </div>
 
-                {/* API error */}
                 {saveErr && (
                     <div style={{ marginTop: 12, padding: "9px 13px", borderRadius: 8, background: "rgba(239,68,68,.08)", border: "1px solid rgba(239,68,68,.22)", color: "#ef4444", fontSize: "0.79rem" }}>
                         {saveErr}
                     </div>
                 )}
 
-                {/* Buttons */}
                 <div style={{ display: "flex", gap: 10, marginTop: 22, justifyContent: "flex-end" }}>
                     <button onClick={onClose}
                         style={{ padding: "9px 18px", borderRadius: 9, border: `1px solid ${t.border}`, background: "transparent", color: t.muted, fontSize: "0.83rem", fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>
@@ -207,37 +242,20 @@ function QuickAddDoctorModal({ t, onClose, onAdded }) {
             </div>
         </div>
     );
-}
+});
 
 // ══════════════════════════════════════════════════════════════
 // REFERRAL DOCTOR DROPDOWN
-// Fetches all doctors for this vendor, shows searchable list
 // ══════════════════════════════════════════════════════════════
-function ReferralDoctorDropdown({ t, value, onChange, error, onQuickAdd }) {
-    // value = { id, name, degree } | null
-    const [allDoctors, setAllDoctors] = useState([]);
-    const [loading, setLoading] = useState(true);
+const ReferralDoctorDropdown = memo(function ReferralDoctorDropdown({ t, value, onChange, error, onQuickAdd, doctors, doctorsLoading }) {
+    // OPT: `doctors` and `doctorsLoading` are now passed in as props,
+    // fetched once by the parent (see useReferralDoctors below) instead of
+    // each dropdown instance (this one AND the one inside BillingModal)
+    // independently hitting the network for the same list.
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
     const wrapperRef = useRef();
 
-    // Load all referring doctors once
-    useEffect(() => {
-        (async () => {
-            try {
-                // Fetch all pages (up to 100) — doctors list is typically small
-                const res = await fetchReferrals({ category: "doctor", page: 1, search: "" });
-                // axios: res.data = { success, data: [...], pagination: {...} }
-                setAllDoctors(res.data.data || []);
-            } catch {
-                setAllDoctors([]);
-            } finally {
-                setLoading(false);
-            }
-        })();
-    }, []);
-
-    // Close on outside click
     useEffect(() => {
         const handler = (e) => {
             if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
@@ -249,43 +267,36 @@ function ReferralDoctorDropdown({ t, value, onChange, error, onQuickAdd }) {
         return () => document.removeEventListener("mousedown", handler);
     }, []);
 
-    const filtered = allDoctors.filter(d =>
-        !query.trim() ||
-        d.name.toLowerCase().includes(query.toLowerCase()) ||
-        d.phone.includes(query) ||
-        (d.degree && d.degree.toLowerCase().includes(query.toLowerCase()))
-    );
+    // OPT: was a plain `.filter()` call executed inline in the render body
+    // on every render (including renders triggered by `open` toggling,
+    // which has nothing to do with the filtered result). Now only
+    // recomputes when the doctor list or the query actually changes.
+    const filtered = useMemo(() => {
+        if (!query.trim()) return doctors;
+        const q = query.toLowerCase();
+        return doctors.filter(d =>
+            d.name.toLowerCase().includes(q) ||
+            d.phone.includes(query) ||
+            (d.degree && d.degree.toLowerCase().includes(q))
+        );
+    }, [doctors, query]);
 
-    // const select = (doc) => {
-    //     // onChange({ id: doc._id, name: doc.name, degree: doc.degree || "" });
-
-    //     setOpen(false);
-    //     setQuery("");
-    // };
-
-    const select = (doc) => {
+    const select = useCallback((doc) => {
         onChange({ id: doc._id.toString(), name: doc.name, degree: doc.degree || "" });
         setOpen(false);
         setQuery("");
-    }
+    }, [onChange]);
 
-    const clear = (e) => {
+    const clear = useCallback((e) => {
         e.stopPropagation();
         onChange(null);
-    };
-
-
-    // ── REPLACE the entire ReferralDoctorDropdown return() with this ──
+    }, [onChange]);
 
     return (
         <div ref={wrapperRef} style={{ position: "relative" }}>
-
             <Label text="Referring Doctor" t={t} />
 
-            {/* Trigger + Quick Add button — side by side */}
             <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
-
-                {/* Trigger */}
                 <div
                     onClick={() => setOpen(o => !o)}
                     style={{
@@ -313,7 +324,7 @@ function ReferralDoctorDropdown({ t, value, onChange, error, onQuickAdd }) {
                             </div>
                         ) : (
                             <span style={{ fontSize: "0.86rem", color: t.faint }}>
-                                {loading ? "Loading doctors…" : "Select referring doctor"}
+                                {doctorsLoading ? "Loading doctors…" : "Select referring doctor"}
                             </span>
                         )}
                     </div>
@@ -328,7 +339,6 @@ function ReferralDoctorDropdown({ t, value, onChange, error, onQuickAdd }) {
                     </div>
                 </div>
 
-                {/* Quick add + button */}
                 <button
                     onClick={(e) => { e.stopPropagation(); onQuickAdd?.(); }}
                     title="Add new doctor"
@@ -337,14 +347,10 @@ function ReferralDoctorDropdown({ t, value, onChange, error, onQuickAdd }) {
                     onMouseLeave={e => { e.currentTarget.style.background = t.accentBg; e.currentTarget.style.color = t.accent; }}>
                     <RiAddLine size={16} />
                 </button>
+            </div>
 
-            </div>{/* end flex row */}
-
-            {/* Dropdown — position: absolute, inside ref wrapper */}
             {open && (
                 <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 100, background: t.card, border: `1px solid ${t.border}`, borderRadius: 10, overflow: "hidden", boxShadow: "0 12px 32px rgba(0,0,0,0.25)" }}>
-
-                    {/* Search inside dropdown */}
                     <div style={{ padding: "8px 10px", borderBottom: `1px solid ${t.border}` }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 7, background: t.inputBg, border: `1px solid ${t.accentRing}`, borderRadius: 7, padding: "6px 10px" }}>
                             <RiSearchLine size={12} style={{ color: t.faint, flexShrink: 0 }} />
@@ -364,24 +370,23 @@ function ReferralDoctorDropdown({ t, value, onChange, error, onQuickAdd }) {
                         </div>
                     </div>
 
-                    {/* List */}
                     <div style={{ maxHeight: 240, overflowY: "auto" }}>
-                        {loading && (
+                        {doctorsLoading && (
                             <div style={{ padding: "16px", textAlign: "center", color: t.muted, fontSize: "0.82rem", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                                 <RiLoader4Line size={14} style={{ animation: "spin .7s linear infinite" }} /> Loading…
                             </div>
                         )}
 
-                        {!loading && filtered.length === 0 && (
+                        {!doctorsLoading && filtered.length === 0 && (
                             <div style={{ padding: "16px", textAlign: "center", color: t.muted, fontSize: "0.82rem" }}>
-                                {allDoctors.length === 0
+                                {doctors.length === 0
                                     ? "No referring doctors found. Add them in Referral Management."
                                     : `No match for "${query}"`
                                 }
                             </div>
                         )}
 
-                        {!loading && filtered.map((doc, i) => {
+                        {!doctorsLoading && filtered.map((doc, i) => {
                             const isSelected = value?.id === doc._id.toString();
                             return (
                                 <div
@@ -417,24 +422,23 @@ function ReferralDoctorDropdown({ t, value, onChange, error, onQuickAdd }) {
                     </div>
                 </div>
             )}
-
-        </div>  // ← closes ref wrapper — everything is inside
+        </div>
     );
-}
+});
 
 // ══════════════════════════════════════════════════════════════
 // BILLING MODAL
 // ══════════════════════════════════════════════════════════════
-function BillingModal({ patient, t, isDark, onClose, onBillCreated, initialDoctor }) {
+const BillingModal = memo(function BillingModal({ patient, t, isDark, onClose, onBillCreated, initialDoctor, doctors, doctorsLoading, onDoctorAdded }) {
     const [allTests, setAllTests] = useState([]);
     const [testSearch, setTestSearch] = useState("");
-    const [testResults, setTestResults] = useState([]);
     const [selectedTests, setSelectedTests] = useState([]);
     const [loadingTests, setLoadingTests] = useState(true);
 
-    const [discountPct, setDiscountPct] = useState(0);
-    const [discountAmt, setDiscountAmt] = useState(0);
-    const [discountReason, setDiscountReason] = useState("");
+    // OPT: three separate discount states consolidated into one object —
+    // fewer hooks, and one place to reset/update them together.
+    const [discount, setDiscount] = useState(EMPTY_DISCOUNT);
+
     const [isDue, setIsDue] = useState(false);
     const [isZero, setIsZero] = useState(false);
     const [paymentMode, setPaymentMode] = useState("cash");
@@ -451,50 +455,76 @@ function BillingModal({ patient, t, isDark, onClose, onBillCreated, initialDocto
         (async () => {
             try {
                 const r = await fetchVendorTests();
-                setAllTests(r.data.tests.filter(t => t.priceSet && t.vendorIsActive));
-            } catch { }
-            finally { setLoadingTests(false); }
+                setAllTests(r.data.tests.filter(test => test.priceSet && test.vendorIsActive));
+            } catch (err) {
+                // FIX: silent empty catch previously swallowed load errors
+                // with no visibility at all — at least log now.
+                console.error("TEST CATALOGUE FETCH ERROR:", err);
+            } finally {
+                setLoadingTests(false);
+            }
         })();
     }, []);
 
-    useEffect(() => {
-        if (!testSearch.trim()) { setTestResults([]); return; }
+    // OPT: was a useEffect + separate `testResults` state that triggered
+    // an extra render every time the user typed (setTestSearch → effect
+    // fires → setTestResults → second render). Now it's a single
+    // synchronous memo computed in the same render as the keystroke.
+    const testResults = useMemo(() => {
+        if (!testSearch.trim()) return [];
         const q = testSearch.toLowerCase();
-        setTestResults(allTests.filter(t =>
-            t.name.toLowerCase().includes(q) ||
-            t.code.toLowerCase().includes(q) ||
-            t.department?.toLowerCase().includes(q)
-        ).slice(0, 8));
+        return allTests.filter(test =>
+            test.name.toLowerCase().includes(q) ||
+            test.code.toLowerCase().includes(q) ||
+            test.department?.toLowerCase().includes(q)
+        ).slice(0, 8);
     }, [testSearch, allTests]);
 
-    const addTest = (test) => {
-        if (selectedTests.find(i => i.testId === test._id)) return;
-        setSelectedTests(p => [...p, { testId: test._id, testName: test.name, testCode: test.code, price: test.vendorPrice, discount: 0, isUrgent: false }]);
-        setTestSearch(""); setTestResults([]);
+    const addTest = useCallback((test) => {
+        setSelectedTests(p => {
+            if (p.find(i => i.testId === test._id)) return p;
+            return [...p, { testId: test._id, testName: test.name, testCode: test.code, price: test.vendorPrice, discount: 0, isUrgent: false }];
+        });
+        setTestSearch("");
         searchRef.current?.focus();
-    };
+    }, []);
 
-    const removeTest = (id) => setSelectedTests(p => p.filter(i => i.testId !== id));
-    const updateItem = (id, k, v) => setSelectedTests(p => p.map(i => i.testId === id ? { ...i, [k]: v } : i));
+    const removeTest = useCallback((id) => {
+        setSelectedTests(p => p.filter(i => i.testId !== id));
+    }, []);
 
-    const subtotal = selectedTests.reduce((s, i) => s + Math.max(0, i.price - (i.discount || 0)), 0);
-    const pctValue = Math.round(subtotal * (Number(discountPct) || 0) / 100);
-    const totalDiscount = pctValue + (Number(discountAmt) || 0);
-    const grandTotal = Math.max(0, subtotal - totalDiscount);
-    const due = isZero ? 0 : Math.max(0, grandTotal - (Number(amountPaid) || 0));
+    const updateItem = useCallback((id, k, v) => {
+        setSelectedTests(p => p.map(i => i.testId === id ? { ...i, [k]: v } : i));
+    }, []);
 
-    useEffect(() => { if (!isDue && !isZero) setAmountPaid(grandTotal); }, [grandTotal, isDue, isZero]);
+    // OPT: subtotal/discount/total/due were plain `const`s recomputed on
+    // *every* render of BillingModal — including renders triggered by
+    // typing in the Notes field or toggling Urgent, neither of which
+    // affects these numbers. useMemo scopes recomputation to the actual
+    // dependencies.
+    const { subtotal, totalDiscount, grandTotal, due } = useMemo(() => {
+        const sub = selectedTests.reduce((s, i) => s + Math.max(0, i.price - (i.discount || 0)), 0);
+        const pctValue = Math.round(sub * (Number(discount.pct) || 0) / 100);
+        const totalDisc = pctValue + (Number(discount.amt) || 0);
+        const total = Math.max(0, sub - totalDisc);
+        const dueAmt = isZero ? 0 : Math.max(0, total - (Number(amountPaid) || 0));
+        return { subtotal: sub, totalDiscount: totalDisc, grandTotal: total, due: dueAmt };
+    }, [selectedTests, discount.pct, discount.amt, isZero, amountPaid]);
 
-    const handleCreateBill = async () => {
+    useEffect(() => {
+        if (!isDue && !isZero) setAmountPaid(grandTotal);
+    }, [grandTotal, isDue, isZero]);
+
+    const handleCreateBill = useCallback(async () => {
         if (selectedTests.length === 0) return;
         try {
             setSaving(true);
             const res = await createBill({
                 patientId: patient._id,
                 items: selectedTests.map(i => ({ testId: i.testId, discount: i.discount, isUrgent: i.isUrgent })),
-                discountPct: Number(discountPct) || 0,
-                discountAmt: Number(discountAmt) || 0,
-                discountReason,
+                discountPct: Number(discount.pct) || 0,
+                discountAmt: Number(discount.amt) || 0,
+                discountReason: discount.reason,
                 paymentMode,
                 amountPaid: isZero ? 0 : Number(amountPaid),
                 isDuePayment: isDue,
@@ -510,8 +540,16 @@ function BillingModal({ patient, t, isDark, onClose, onBillCreated, initialDocto
             });
         } catch (err) {
             alert(err.response?.data?.message || "Failed to create bill.");
-        } finally { setSaving(false); }
-    };
+        } finally {
+            setSaving(false);
+        }
+    }, [selectedTests, patient, discount, paymentMode, amountPaid, isDue, isZero, dispatch, referringDoctor, notes, onBillCreated]);
+
+    const handleDoctorAdded = useCallback((doc) => {
+        setReferringDoctor(doc);
+        setShowQuickAdd(false);
+        onDoctorAdded?.(doc); // OPT: bubble up so the shared cache updates too
+    }, [onDoctorAdded]);
 
     return (
         <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
@@ -519,14 +557,13 @@ function BillingModal({ patient, t, isDark, onClose, onBillCreated, initialDocto
                 <QuickAddDoctorModal
                     t={t}
                     onClose={() => setShowQuickAdd(false)}
-                    onAdded={(doc) => { setReferringDoctor(doc); setShowQuickAdd(false); }}
+                    onAdded={handleDoctorAdded}
                 />
             )}
             <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.65)", backdropFilter: "blur(5px)" }} />
 
             <div style={{ position: "relative", zIndex: 1, width: "100%", maxWidth: 920, background: t.card, border: `1px solid ${t.border}`, borderRadius: 20, boxShadow: "0 28px 70px rgba(0,0,0,0.45)", maxHeight: "94vh", display: "flex", flexDirection: "column" }}>
 
-                {/* Header */}
                 <div style={{ padding: "18px 24px", borderBottom: `1px solid ${t.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
                     <div>
                         <div className="playfair" style={{ fontSize: "1.1rem", fontWeight: 700, color: t.heading }}>Billing</div>
@@ -544,7 +581,6 @@ function BillingModal({ patient, t, isDark, onClose, onBillCreated, initialDocto
                     </button>
                 </div>
 
-                {/* Body */}
                 <div style={{ flex: 1, overflowY: "auto", display: "grid", gridTemplateColumns: "1fr 320px" }}>
 
                     {/* LEFT */}
@@ -615,11 +651,11 @@ function BillingModal({ patient, t, isDark, onClose, onBillCreated, initialDocto
                         )}
 
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 20 }}>
-                            <div><Label text="Discount %" t={t} /><input type="number" min="0" max="100" value={discountPct} onChange={e => setDiscountPct(e.target.value)} style={inpCls(t)} /></div>
-                            <div><Label text="Discount ₹" t={t} /><input type="number" min="0" value={discountAmt} onChange={e => setDiscountAmt(e.target.value)} style={inpCls(t)} /></div>
+                            <div><Label text="Discount %" t={t} /><input type="number" min="0" max="100" value={discount.pct} onChange={e => setDiscount(d => ({ ...d, pct: e.target.value }))} style={inpCls(t)} /></div>
+                            <div><Label text="Discount ₹" t={t} /><input type="number" min="0" value={discount.amt} onChange={e => setDiscount(d => ({ ...d, amt: e.target.value }))} style={inpCls(t)} /></div>
                             <div style={{ gridColumn: "1/-1" }}>
                                 <Label text="Reason of Discount" t={t} />
-                                <input value={discountReason} onChange={e => setDiscountReason(e.target.value)} placeholder="Optional" style={inpCls(t)} />
+                                <input value={discount.reason} onChange={e => setDiscount(d => ({ ...d, reason: e.target.value }))} placeholder="Optional" style={inpCls(t)} />
                             </div>
                         </div>
                     </div>
@@ -640,6 +676,8 @@ function BillingModal({ patient, t, isDark, onClose, onBillCreated, initialDocto
                                 value={referringDoctor}
                                 onChange={setReferringDoctor}
                                 onQuickAdd={() => setShowQuickAdd(true)}
+                                doctors={doctors}
+                                doctorsLoading={doctorsLoading}
                             />
                         </div>
 
@@ -705,19 +743,13 @@ function BillingModal({ patient, t, isDark, onClose, onBillCreated, initialDocto
             </div>
         </div>
     );
-}
+});
 
 // ══════════════════════════════════════════════════════════════
 // MAIN — NEW REGISTRATION
 // ══════════════════════════════════════════════════════════════
 export default function BillRegistration({ t, isDark }) {
-    const [form, setForm] = useState({
-        designation: "MR.", firstName: "", lastName: "",
-        gender: "male", age: "", ageType: "year",
-        phone: "", email: "", address: "",
-        ownerName: "",
-    });
-    // ✅ Referring doctor stored separately as {id, name, degree} | null
+    const [form, setForm] = useState(EMPTY_FORM);
     const [referringDoctor, setReferringDoctor] = useState(null);
     const [showQuickAdd, setShowQuickAdd] = useState(false);
 
@@ -739,16 +771,47 @@ export default function BillRegistration({ t, isDark }) {
         state: "",
     });
 
+    // OPT: doctor list is now fetched exactly once, here, and passed down
+    // as props to both ReferralDoctorDropdown instances (the one on this
+    // page and the one inside BillingModal) instead of each of them
+    // independently calling fetchReferrals on mount.
+    const [doctors, setDoctors] = useState([]);
+    const [doctorsLoading, setDoctorsLoading] = useState(true);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const res = await fetchReferrals({ category: "doctor", page: 1, search: "" });
+                setDoctors(res.data.data || []);
+            } catch (err) {
+                console.error("REFERRAL DOCTORS FETCH ERROR:", err);
+                setDoctors([]);
+            } finally {
+                setDoctorsLoading(false);
+            }
+        })();
+    }, []);
+
+    const handleDoctorAdded = useCallback((doc) => {
+        setDoctors(prev => [doc, ...prev]);
+    }, []);
+
     useEffect(() => {
         (async () => {
             try {
                 const res = await fetchProfile();
                 setVendor(v => ({ ...v, ...res.data.user }));
-            } catch {
-                console.log("PROFILE FETCH ERROR:", err);
+            } catch (err) {
+                // FIX: original was `catch { console.log(..., err) }` —
+                // `err` isn't in scope for a parameter-less catch, so this
+                // threw a ReferenceError inside the catch handler itself
+                // any time the profile fetch actually failed, hiding the
+                // real error. Now the parameter is captured properly.
+                console.error("PROFILE FETCH ERROR:", err);
             }
         })();
     }, []);
+
     // Patient search
     const [patientSearch, setPatientSearch] = useState("");
     const [searchResults, setSearchResults] = useState([]);
@@ -763,23 +826,33 @@ export default function BillRegistration({ t, isDark }) {
                 setSearching(true);
                 const r = await searchPatients(patientSearch);
                 setSearchResults(r.data.patients);
-            } catch { } finally { setSearching(false); }
+            } catch (err) {
+                console.error("PATIENT SEARCH ERROR:", err);
+            } finally {
+                setSearching(false);
+            }
         }, 400);
+        // OPT: clear the pending debounce on unmount so a slow response
+        // can't call setState after the component is gone.
+        return () => clearTimeout(searchTimeout.current);
     }, [patientSearch]);
 
-    const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErrors(e => ({ ...e, [k]: "" })); };
+    const set = useCallback((k, v) => {
+        setForm(f => ({ ...f, [k]: v }));
+        setErrors(e => ({ ...e, [k]: "" }));
+    }, []);
 
-    const resetForm = () => {
-        setForm({ designation: "MR.", firstName: "", lastName: "", gender: "male", age: "", ageType: "year", phone: "", email: "", address: "", ownerName: "" });
+    const resetForm = useCallback(() => {
+        setForm(EMPTY_FORM);
         setReferringDoctor(null);
         setErrors({});
         setPatient(null);
         setPatientSearch("");
         setSearchResults([]);
         setBillDone(null);
-    };
+    }, []);
 
-    const handleRegister = async () => {
+    const handleRegister = useCallback(async () => {
         const errs = {};
         if (!form.firstName.trim()) errs.firstName = "First name is required.";
         if (!form.age || isNaN(form.age)) errs.age = "Valid age is required.";
@@ -788,7 +861,6 @@ export default function BillRegistration({ t, isDark }) {
 
         try {
             setSaving(true);
-            // ✅ Send referringDoctorId + referringDoctorName to backend
             const payload = {
                 ...form,
                 referringDoctorId: referringDoctor?.id || null,
@@ -801,59 +873,65 @@ export default function BillRegistration({ t, isDark }) {
             const data = err.response?.data;
             if (data?.errors) setErrors(data.errors);
             setToast({ msg: data?.message || "Registration failed.", type: "error" });
-        } finally { setSaving(false); }
-    };
+        } finally {
+            setSaving(false);
+        }
+    }, [form, referringDoctor]);
 
-    const handleGoToBilling = () => {
+    const handleGoToBilling = useCallback(() => {
         if (!patient) { setToast({ msg: "Register patient first.", type: "error" }); return; }
         setShowBilling(true);
-    };
+    }, [patient]);
 
-    const handleBillCreated = (bill) => {
+    const handleBillCreated = useCallback((bill) => {
         setShowBilling(false);
         setBillDone(bill);
         setToast({ msg: `Bill ${bill.billNumber} created!`, type: "success" });
-    };
+    }, []);
 
-    const selectExistingPatient = (p) => {
+    const selectExistingPatient = useCallback((p) => {
         setPatient(p);
-        // Pre-fill referring doctor if patient already has one
         if (p.referringDoctorId) {
             setReferringDoctor({
-                id: p.referringDoctorId.toString(),   // ← normalize
+                id: p.referringDoctorId.toString(),
                 name: p.referringDoctorName || "",
-                degree: ""
+                degree: "",
             });
         }
-        setPatientSearch(""); setSearchResults([]);
+        setPatientSearch("");
+        setSearchResults([]);
         setToast({ msg: `Patient ${p.patientId} loaded.`, type: "success" });
-    };
+    }, []);
+
+    const closeToast = useCallback(() => setToast({ msg: "", type: "" }), []);
 
     return (
         <div>
-
             <style>{`
     @keyframes spin { to { transform: rotate(360deg); } }
     select option { background: #0f172a !important; color: #e2e8f0 !important; }
     select:focus { outline: none; }
 `}</style>
 
-            <Toast msg={toast.msg} type={toast.type} onClose={() => setToast({ msg: "", type: "" })} />
+            <Toast msg={toast.msg} type={toast.type} onClose={closeToast} />
 
             {showBilling && patient && (
-                <>
-                    <BillingModal patient={patient} t={t} isDark={isDark}
-                        onClose={() => setShowBilling(false)}
-                        onBillCreated={handleBillCreated}
-                        initialDoctor={referringDoctor} />
-                </>
+                <BillingModal
+                    patient={patient} t={t} isDark={isDark}
+                    onClose={() => setShowBilling(false)}
+                    onBillCreated={handleBillCreated}
+                    initialDoctor={referringDoctor}
+                    doctors={doctors}
+                    doctorsLoading={doctorsLoading}
+                    onDoctorAdded={handleDoctorAdded}
+                />
             )}
 
             {showQuickAdd && (
                 <QuickAddDoctorModal
                     t={t}
                     onClose={() => setShowQuickAdd(false)}
-                    onAdded={(doc) => { setReferringDoctor(doc); setShowQuickAdd(false); }}
+                    onAdded={(doc) => { setReferringDoctor(doc); setShowQuickAdd(false); handleDoctorAdded(doc); }}
                 />
             )}
 
@@ -928,17 +1006,10 @@ export default function BillRegistration({ t, isDark }) {
             {/* Registration Form */}
             <div style={{ background: t.card, border: `1px solid ${t.border}`, borderRadius: 16, padding: 28 }}>
 
-                {/* Row 1: Designation + Name + Age */}
                 <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr 100px 100px", gap: 14, marginBottom: 16 }}>
                     <div>
                         <Label text="Designation" t={t} />
-                        <CustomSelect
-                            t={t}
-                            value={form.designation}
-                            onChange={val => set("designation", val)}
-                            options={DESIGNATIONS}
-                        // label="Designation"
-                        />
+                        <CustomSelect t={t} value={form.designation} onChange={val => set("designation", val)} options={DESIGNATIONS} />
                     </div>
                     <div>
                         <Label text="First Name" t={t} required />
@@ -956,17 +1027,10 @@ export default function BillRegistration({ t, isDark }) {
                     </div>
                     <div>
                         <Label text="Age Type" t={t} />
-                        <CustomSelect
-                            t={t}
-                            value={form.ageType}
-                            onChange={val => set("ageType", val)}
-                            options={AGE_TYPES.map(a => ({ value: a, label: a.charAt(0).toUpperCase() + a.slice(1) }))}
-                        // label="Age Type"y
-                        />
+                        <CustomSelect t={t} value={form.ageType} onChange={val => set("ageType", val)} options={AGE_TYPES.map(a => ({ value: a, label: a.charAt(0).toUpperCase() + a.slice(1) }))} />
                     </div>
                 </div>
 
-                {/* Row 2: Gender */}
                 <div style={{ marginBottom: 16 }}>
                     <Label text="Gender" t={t} required />
                     <div style={{ display: "flex", gap: 20 }}>
@@ -979,7 +1043,6 @@ export default function BillRegistration({ t, isDark }) {
                     </div>
                 </div>
 
-                {/* Row 3: Phone + Email */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
                     <div>
                         <Label text="Phone Number" t={t} required />
@@ -998,25 +1061,24 @@ export default function BillRegistration({ t, isDark }) {
                     </div>
                 </div>
 
-                {/* Row 4: Owner Name + Referring Doctor Dropdown */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
                     <div>
                         <Label text="Owner Name" t={t} />
                         <input value={form.ownerName} onChange={e => set("ownerName", e.target.value)} placeholder="Enter owner name" style={inpCls(t)} />
                     </div>
                     <div>
-                        {/* ✅ Referral Doctor Dropdown */}
                         <ReferralDoctorDropdown
                             t={t}
                             value={referringDoctor}
                             onChange={setReferringDoctor}
                             error={errors.referringDoctor}
                             onQuickAdd={() => setShowQuickAdd(true)}
+                            doctors={doctors}
+                            doctorsLoading={doctorsLoading}
                         />
                     </div>
                 </div>
 
-                {/* Row 5: Address */}
                 <div style={{ marginBottom: 20 }}>
                     <Label text="Address" t={t} />
                     <div style={{ position: "relative" }}>
@@ -1025,7 +1087,6 @@ export default function BillRegistration({ t, isDark }) {
                     </div>
                 </div>
 
-                {/* Footer */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div style={{ fontSize: "0.78rem", color: t.muted }}>
                         Patient ID: <strong style={{ color: t.heading }}>{patient?.patientId || "Auto-generated"}</strong>

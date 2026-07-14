@@ -11,9 +11,29 @@
  *   partial       → "Partial"  (yellow)
  *   completed     → "Completed"(blue)
  *   verified      → "Verified" (green)
+ *
+ * ── PERF NOTES ──────────────────────────────────────────────────────
+ * - StatusPill / FlagBadge / ParamRow / TestSection / BillRow wrapped in
+ *   React.memo. To make memo actually pay off, callbacks passed down
+ *   (onChange, onSelect) are STABLE references (useCallback in parents)
+ *   instead of new arrow functions created on every render.
+ * - Per-test filled/total/abnormal/sorted-params are computed once per
+ *   testResult via a single useMemo loop instead of 3 separate
+ *   .filter()/.sort() passes on every render.
+ * - BillPicker's filtered/dateBills/counts/quick-range flags are all
+ *   useMemo'd against their real dependencies instead of recomputing
+ *   (and re-filtering the whole bills array) on every render.
+ * - Row hover uses a CSS class + custom property instead of inline
+ *   onMouseEnter/onMouseLeave JS handlers.
+ * - Bill list virtualizes with react-window once the filtered list gets
+ *   large, so we're not mounting hundreds of DOM rows at once.
+ * - structuredClone replaces JSON.parse(JSON.stringify(...)) for the
+ *   deep clone of report.testResults.
+ * ─────────────────────────────────────────────────────────────────────
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { memo, useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { FixedSizeList as List } from "react-window";
 import {
     RiArrowLeftLine, RiSaveLine, RiCheckboxCircleLine,
     RiPrinterLine, RiLoader4Line, RiAlertLine,
@@ -34,7 +54,8 @@ const REPORT_STATUS = {
     verified: { label: "Verified", bg: "rgba(34,197,94,0.12)", color: "#16a34a", dot: "#22c55e" },
 };
 
-function StatusPill({ status }) {
+// ── Status pill (memoized — only re-renders when `status` changes) ─
+const StatusPill = memo(function StatusPill({ status }) {
     const s = REPORT_STATUS[status] || REPORT_STATUS.not_started;
     return (
         <span style={{
@@ -48,10 +69,10 @@ function StatusPill({ status }) {
             {s.label}
         </span>
     );
-}
+});
 
-// ── Flag badge ─────────────────────────────────────────────────────
-function FlagBadge({ flag }) {
+// ── Flag badge (memoized) ───────────────────────────────────────────
+const FlagBadge = memo(function FlagBadge({ flag }) {
     if (!flag || flag === "N") return null;
     return (
         <span style={{
@@ -64,10 +85,13 @@ function FlagBadge({ flag }) {
             {flag}
         </span>
     );
-}
+});
 
 // ── Param row ──────────────────────────────────────────────────────
-function ParamRow({ param, onChange, t, isDark }) {
+// Takes `testResultId` + the stable `onChange` (== handleParamChange from
+// the form, already useCallback'd) instead of a fresh inline arrow fn per
+// row per render — that's what lets memo actually skip unrelated rows.
+const ParamRow = memo(function ParamRow({ param, testResultId, onChange, t, isDark }) {
     const isHeading = param.fieldType === "heading";
     const isAbnormal = param.flag === "H" || param.flag === "L";
 
@@ -86,6 +110,8 @@ function ParamRow({ param, onChange, t, isDark }) {
 
     const valueColor = param.flag === "H" ? "#dc2626" : param.flag === "L" ? "#2563eb" : (isDark ? "#e2e8f0" : "#0f172a");
 
+    const handleValue = (e) => onChange(testResultId, param._id, e.target.value);
+
     return (
         <tr style={{ borderTop: `1px solid ${t.border}`, background: isAbnormal ? (isDark ? "rgba(239,68,68,0.04)" : "rgba(239,68,68,0.03)") : "transparent" }}>
             <td style={{ padding: "8px 16px", paddingLeft: param.isSubField ? 32 : 16, fontSize: "0.82rem", color: isDark ? "#e2e8f0" : "#0f172a", fontWeight: isAbnormal ? 600 : 400, width: "34%", verticalAlign: "middle" }}>
@@ -95,16 +121,16 @@ function ParamRow({ param, onChange, t, isDark }) {
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <FlagBadge flag={param.flag} />
                     {param.fieldType === "option" ? (
-                        <select value={param.value} onChange={e => onChange(param._id, e.target.value)}
+                        <select value={param.value} onChange={handleValue}
                             style={{ flex: 1, background: t.inputBg, border: `1.5px solid ${isAbnormal ? (param.flag === "H" ? "rgba(239,68,68,0.5)" : "rgba(59,130,246,0.5)") : t.accentRing}`, borderRadius: 7, padding: "5px 8px", color: valueColor, fontSize: "0.82rem", fontFamily: "'DM Sans',sans-serif", outline: "none", cursor: "pointer" }}>
                             <option value="">— Select —</option>
                             {param.options?.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                         </select>
                     ) : param.fieldType === "text" ? (
-                        <input value={param.value} onChange={e => onChange(param._id, e.target.value)} placeholder="Enter value"
+                        <input value={param.value} onChange={handleValue} placeholder="Enter value"
                             style={{ flex: 1, background: t.inputBg, border: `1.5px solid ${t.accentRing}`, borderRadius: 7, padding: "5px 8px", color: valueColor, fontSize: "0.82rem", fontFamily: "'DM Sans',sans-serif", outline: "none" }} />
                     ) : (
-                        <input type="number" value={param.value} onChange={e => onChange(param._id, e.target.value)} placeholder="Value"
+                        <input type="number" value={param.value} onChange={handleValue} placeholder="Value"
                             style={{ flex: 1, background: t.inputBg, border: `1.5px solid ${isAbnormal ? (param.flag === "H" ? "rgba(239,68,68,0.6)" : "rgba(59,130,246,0.6)") : t.accentRing}`, borderRadius: 7, padding: "5px 8px", color: valueColor, fontSize: "0.86rem", fontWeight: isAbnormal ? 700 : 400, fontFamily: "'DM Sans',sans-serif", outline: "none", width: 90 }} />
                     )}
                 </div>
@@ -118,15 +144,26 @@ function ParamRow({ param, onChange, t, isDark }) {
             <td style={{ padding: "6px 16px", fontSize: "0.76rem", color: t.muted, width: "22%", verticalAlign: "middle", lineHeight: 1.4 }}>{range || "—"}</td>
         </tr>
     );
-}
+});
 
-// ── Test section ───────────────────────────────────────────────────
-function TestSection({ testResult, t, isDark, onParamChange, onInterpretChange, isActive, onSelect }) {
+// ── Test section (memoized) ─────────────────────────────────────────
+const TestSection = memo(function TestSection({ testResult, t, isDark, onParamChange, onInterpretChange, isActive, onSelect }) {
     const [showInterp, setShowInterp] = useState(false);
-    const filled = testResult.paramResults.filter(p => p.fieldType !== "heading" && p.value !== "").length;
-    const total = testResult.paramResults.filter(p => p.fieldType !== "heading").length;
-    const abnormal = testResult.paramResults.filter(p => p.isAbnormal).length;
-    const pct = total > 0 ? Math.round((filled / total) * 100) : 0;
+
+    // One pass over paramResults instead of 3 separate .filter() calls,
+    // plus a memoized sorted copy instead of sorting the live array in
+    // render (the old code called .sort() — which mutates — on every render).
+    const { filled, total, abnormal, pct, sortedParams } = useMemo(() => {
+        let filled = 0, total = 0, abnormal = 0;
+        for (const p of testResult.paramResults) {
+            if (p.fieldType === "heading") continue;
+            total++;
+            if (p.value !== "") filled++;
+            if (p.isAbnormal) abnormal++;
+        }
+        const sortedParams = [...testResult.paramResults].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        return { filled, total, abnormal, pct: total > 0 ? Math.round((filled / total) * 100) : 0, sortedParams };
+    }, [testResult.paramResults]);
 
     return (
         <div style={{ marginBottom: 20, border: `1.5px solid ${isActive ? t.accent : t.border}`, borderRadius: 14, overflow: "hidden", transition: "border-color .2s" }}>
@@ -173,9 +210,9 @@ function TestSection({ testResult, t, isDark, onParamChange, onInterpretChange, 
                             </tr>
                         </thead>
                         <tbody>
-                            {testResult.paramResults.sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map(param => (
+                            {sortedParams.map(param => (
                                 <ParamRow key={param._id} param={param} t={t} isDark={isDark}
-                                    onChange={(paramId, val) => onParamChange(testResult._id, paramId, val)} />
+                                    testResultId={testResult._id} onChange={onParamChange} />
                             ))}
                         </tbody>
                     </table>
@@ -195,7 +232,7 @@ function TestSection({ testResult, t, isDark, onParamChange, onInterpretChange, 
             )}
         </div>
     );
-}
+});
 
 // ── Action button config per status ───────────────────────────────
 const ACTION_CFG = {
@@ -208,6 +245,116 @@ const ACTION_CFG = {
 
 // ── toInputDate helper ─────────────────────────────────────────────
 const toDateInput = (d) => new Date(d).toISOString().split("T")[0];
+
+const BILL_GRID_COLS = "4px 1.4fr 1.7fr 2.6fr 1fr 160px 170px";
+const ROW_HEIGHT = 88;
+const VIRTUALIZE_THRESHOLD = 40; // only pay react-window's overhead once lists actually get big
+
+// ── Bill row (memoized, used both in plain map and in react-window) ─
+const BillRow = memo(function BillRow({ bill, reportMap, onSelect, t, style, isLast }) {
+    const rStatus = reportMap[bill._id?.toString()] || "not_started";
+    const statusCfg = REPORT_STATUS[rStatus] || REPORT_STATUS.not_started;
+    const actionCfg = ACTION_CFG[rStatus] || ACTION_CFG.not_started;
+    const ActionIcon = actionCfg.Icon;
+
+    return (
+        <div
+            className="bp-row"
+            style={{
+                ...style,
+                display: "grid",
+                gridTemplateColumns: BILL_GRID_COLS,
+                borderBottom: isLast ? "none" : `1px solid ${t.border}`,
+                alignItems: "center",
+                "--row-hover": t.rowHover,
+            }}
+        >
+            {/* Status bar left edge */}
+            <div style={{ height: "100%", minHeight: 64, background: statusCfg.dot, borderRadius: "0 2px 2px 0" }} />
+
+            {/* Bill no + date */}
+            <div style={{ padding: "16px 12px 16px 18px" }}>
+                <div style={{ fontWeight: 700, color: t.accent, fontSize: "0.82rem", letterSpacing: "0.01em" }}>
+                    {bill.billNumber}
+                </div>
+                <div style={{ fontSize: "0.7rem", color: t.faint, marginTop: 3 }}>
+                    {new Date(bill.billingDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                </div>
+                <div style={{ fontSize: "0.69rem", color: t.faint, marginTop: 1 }}>
+                    {new Date(bill.billingDate).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }).toLowerCase()}
+                </div>
+            </div>
+
+            {/* Patient */}
+            <div style={{ padding: "16px 12px" }}>
+                <div style={{ fontWeight: 600, color: t.text, fontSize: "0.85rem" }}>
+                    {bill.patient?.firstName} {bill.patient?.lastName}
+                </div>
+                <div style={{ fontSize: "0.71rem", color: t.muted, marginTop: 3 }}>
+                    {bill.patientId} · {bill.patient?.age} yr · {bill.patient?.gender}
+                </div>
+                {bill.patient?.phone && (
+                    <div style={{ fontSize: "0.69rem", color: t.faint, marginTop: 2 }}>{bill.patient.phone}</div>
+                )}
+            </div>
+
+            {/* Tests */}
+            <div style={{ padding: "16px 12px", fontSize: "0.8rem", color: t.muted, lineHeight: 1.6, overflow: "hidden", textOverflow: "ellipsis" }}>
+                {bill.items?.map(i => i.testName).join(", ")}
+            </div>
+
+            {/* Amount */}
+            <div style={{ padding: "16px 12px" }}>
+                <div style={{ fontWeight: 700, color: t.heading, fontSize: "0.88rem" }}>
+                    ₹{bill.grandTotal?.toLocaleString("en-IN")}
+                </div>
+                {bill.dueAmount > 0 && (
+                    <div style={{ fontSize: "0.69rem", color: "#dc2626", marginTop: 3, fontWeight: 600 }}>
+                        Due ₹{bill.dueAmount?.toLocaleString("en-IN")}
+                    </div>
+                )}
+            </div>
+
+            {/* Report status */}
+            <div style={{ padding: "16px 12px" }}>
+                <span style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    padding: "6px 14px", borderRadius: 20,
+                    background: statusCfg.bg, color: statusCfg.color,
+                    fontSize: "0.75rem", fontWeight: 600,
+                    border: `1px solid ${statusCfg.dot}44`,
+                    whiteSpace: "nowrap",
+                }}>
+                    <span style={{
+                        width: 7, height: 7, borderRadius: "50%", background: statusCfg.dot, flexShrink: 0,
+                        boxShadow: `0 0 5px ${statusCfg.dot}`,
+                    }} />
+                    {statusCfg.label}
+                </span>
+            </div>
+
+            {/* Action button */}
+            <div style={{ padding: "16px 16px 16px 8px", display: "flex" }}>
+                <button
+                    onClick={() => onSelect(bill)}
+                    className="bp-action-btn"
+                    style={{
+                        width: "100%",
+                        display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                        padding: "9px 12px", borderRadius: 9,
+                        border: `1.5px solid ${actionCfg.border}`,
+                        background: actionCfg.bg,
+                        color: actionCfg.color,
+                        fontSize: "0.78rem", fontWeight: 700, cursor: "pointer",
+                        fontFamily: "'DM Sans',sans-serif", whiteSpace: "nowrap",
+                    }}
+                >
+                    <ActionIcon size={13} /> {actionCfg.label}
+                </button>
+            </div>
+        </div>
+    );
+});
 
 // ══════════════════════════════════════════════════════════════════
 // BILL PICKER — with report status column
@@ -246,42 +393,38 @@ function BillPicker({ t, isDark, onSelect }) {
 
     useEffect(() => { load(); }, [load]);
 
-    // ── Filter: date range + search + status ──────────────────────
-    const filtered = bills.filter(b => {
-        // Date filter
-        const bd = toDateInput(b.billingDate);
-        if (bd < fromDate || bd > toDate) return false;
-
-        // Search
-        const q = search.toLowerCase();
-        if (q) {
-            const matchSearch =
-                b.billNumber?.toLowerCase().includes(q) ||
-                b.patientId?.toLowerCase().includes(q) ||
-                b.patient?.firstName?.toLowerCase().includes(q) ||
-                b.patient?.lastName?.toLowerCase().includes(q) ||
-                b.patient?.phone?.includes(q) ||
-                b.items?.some(i => i.testName?.toLowerCase().includes(q));
-            if (!matchSearch) return false;
-        }
-
-        // Status filter
-        const rStatus = reportMap[b._id?.toString()] || "not_started";
-        if (statusFilter !== "ALL" && rStatus !== statusFilter) return false;
-
-        return true;
-    });
-
-    // ── Counts — only within current date range ───────────────────
-    const dateBills = bills.filter(b => {
+    // ── dateBills: bills within the selected range (memoized) ──────
+    const dateBills = useMemo(() => bills.filter(b => {
         const bd = toDateInput(b.billingDate);
         return bd >= fromDate && bd <= toDate;
-    });
-    const counts = dateBills.reduce((acc, b) => {
+    }), [bills, fromDate, toDate]);
+
+    // ── filtered: dateBills + search + status (memoized, single pass) ─
+    const filtered = useMemo(() => {
+        const q = search.toLowerCase();
+        return dateBills.filter(b => {
+            if (q) {
+                const matchSearch =
+                    b.billNumber?.toLowerCase().includes(q) ||
+                    b.patientId?.toLowerCase().includes(q) ||
+                    b.patient?.firstName?.toLowerCase().includes(q) ||
+                    b.patient?.lastName?.toLowerCase().includes(q) ||
+                    b.patient?.phone?.includes(q) ||
+                    b.items?.some(i => i.testName?.toLowerCase().includes(q));
+                if (!matchSearch) return false;
+            }
+            const rStatus = reportMap[b._id?.toString()] || "not_started";
+            if (statusFilter !== "ALL" && rStatus !== statusFilter) return false;
+            return true;
+        });
+    }, [dateBills, search, statusFilter, reportMap]);
+
+    // ── Counts — only within current date range (memoized, single pass) ─
+    const counts = useMemo(() => dateBills.reduce((acc, b) => {
         const s = reportMap[b._id?.toString()] || "not_started";
         acc[s] = (acc[s] || 0) + 1;
         return acc;
-    }, {});
+    }, {}), [dateBills, reportMap]);
 
     // Quick range helpers
     const setToday = () => { setFromDate(todayStr); setToDate(todayStr); };
@@ -289,14 +432,23 @@ function BillPicker({ t, isDark, onSelect }) {
     const setLast7 = () => { setFromDate(toDateInput(new Date(Date.now() - 6 * 86400000))); setToDate(todayStr); };
     const setLast30 = () => { setFromDate(toDateInput(new Date(Date.now() - 29 * 86400000))); setToDate(todayStr); };
 
-    const isToday = fromDate === todayStr && toDate === todayStr;
-    const isYesterday = fromDate === toDate && fromDate === toDateInput(new Date(Date.now() - 86400000));
-    const isLast7 = fromDate === toDateInput(new Date(Date.now() - 6 * 86400000)) && toDate === todayStr;
-    const isLast30 = fromDate === toDateInput(new Date(Date.now() - 29 * 86400000)) && toDate === todayStr;
+    const { isToday, isYesterday, isLast7, isLast30 } = useMemo(() => ({
+        isToday: fromDate === todayStr && toDate === todayStr,
+        isYesterday: fromDate === toDate && fromDate === toDateInput(new Date(Date.now() - 86400000)),
+        isLast7: fromDate === toDateInput(new Date(Date.now() - 6 * 86400000)) && toDate === todayStr,
+        isLast30: fromDate === toDateInput(new Date(Date.now() - 29 * 86400000)) && toDate === todayStr,
+    }), [fromDate, toDate, todayStr]);
 
     return (
         <div>
-            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+            <style>{`
+                @keyframes spin{to{transform:rotate(360deg)}}
+                /* CSS hover instead of onMouseEnter/onMouseLeave JS handlers */
+                .bp-row { transition: background .12s; cursor: default; }
+                .bp-row:hover { background: var(--row-hover); }
+                .bp-action-btn { transition: opacity .15s; }
+                .bp-action-btn:hover { opacity: 0.8; }
+            `}</style>
 
             {/* ── Page header ── */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
@@ -409,7 +561,7 @@ function BillPicker({ t, isDark, onSelect }) {
                     {/* ── Column headers ── */}
                     <div style={{
                         display: "grid",
-                        gridTemplateColumns: "4px 1.4fr 1.7fr 2.6fr 1fr 160px 170px",
+                        gridTemplateColumns: BILL_GRID_COLS,
                         background: t.accentBg, borderBottom: `1px solid ${t.border}`,
                         fontSize: "0.65rem", fontWeight: 700, color: t.muted,
                         letterSpacing: "0.08em", textTransform: "uppercase",
@@ -433,115 +585,38 @@ function BillPicker({ t, isDark, onSelect }) {
                                 {search ? `No match for "${search}"` : "Try changing the date range or status filter."}
                             </p>
                         </div>
-                    ) : filtered.map((bill, i) => {
-                        const rStatus = reportMap[bill._id?.toString()] || "not_started";
-                        const statusCfg = REPORT_STATUS[rStatus] || REPORT_STATUS.not_started;
-                        const actionCfg = ACTION_CFG[rStatus] || ACTION_CFG.not_started;
-                        const ActionIcon = actionCfg.Icon;
-                        const isLast = i === filtered.length - 1;
-
-                        return (
-                            <div
+                    ) : filtered.length > VIRTUALIZE_THRESHOLD ? (
+                        // Virtualized: only the ~7-8 rows actually in the viewport get mounted,
+                        // regardless of whether filtered has 100 or 10,000 bills.
+                        <List
+                            height={Math.min(filtered.length * ROW_HEIGHT, 640)}
+                            itemCount={filtered.length}
+                            itemSize={ROW_HEIGHT}
+                            width="100%"
+                        >
+                            {({ index, style }) => (
+                                <BillRow
+                                    bill={filtered[index]}
+                                    reportMap={reportMap}
+                                    onSelect={onSelect}
+                                    t={t}
+                                    style={style}
+                                    isLast={index === filtered.length - 1}
+                                />
+                            )}
+                        </List>
+                    ) : (
+                        filtered.map((bill, i) => (
+                            <BillRow
                                 key={bill._id}
-                                style={{
-                                    display: "grid",
-                                    gridTemplateColumns: "4px 1.4fr 1.7fr 2.6fr 1fr 160px 170px",
-                                    borderBottom: isLast ? "none" : `1px solid ${t.border}`,
-                                    alignItems: "center",
-                                    transition: "background .12s",
-                                    cursor: "default",
-                                }}
-                                onMouseEnter={e => e.currentTarget.style.background = t.rowHover}
-                                onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-                            >
-                                {/* Status bar left edge */}
-                                <div style={{ height: "100%", minHeight: 64, background: statusCfg.dot, borderRadius: "0 2px 2px 0" }} />
-
-                                {/* Bill no + date */}
-                                <div style={{ padding: "16px 12px 16px 18px" }}>
-                                    <div style={{ fontWeight: 700, color: t.accent, fontSize: "0.82rem", letterSpacing: "0.01em" }}>
-                                        {bill.billNumber}
-                                    </div>
-                                    <div style={{ fontSize: "0.7rem", color: t.faint, marginTop: 3 }}>
-                                        {new Date(bill.billingDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
-                                    </div>
-                                    <div style={{ fontSize: "0.69rem", color: t.faint, marginTop: 1 }}>
-                                        {new Date(bill.billingDate).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }).toLowerCase()}
-                                    </div>
-                                </div>
-
-                                {/* Patient */}
-                                <div style={{ padding: "16px 12px" }}>
-                                    <div style={{ fontWeight: 600, color: t.text, fontSize: "0.85rem" }}>
-                                        {bill.patient?.firstName} {bill.patient?.lastName}
-                                    </div>
-                                    <div style={{ fontSize: "0.71rem", color: t.muted, marginTop: 3 }}>
-                                        {bill.patientId} · {bill.patient?.age} yr · {bill.patient?.gender}
-                                    </div>
-                                    {bill.patient?.phone && (
-                                        <div style={{ fontSize: "0.69rem", color: t.faint, marginTop: 2 }}>{bill.patient.phone}</div>
-                                    )}
-                                </div>
-
-                                {/* Tests */}
-                                <div style={{ padding: "16px 12px", fontSize: "0.8rem", color: t.muted, lineHeight: 1.6 }}>
-                                    {bill.items?.map(i => i.testName).join(", ")}
-                                </div>
-
-                                {/* Amount */}
-                                <div style={{ padding: "16px 12px" }}>
-                                    <div style={{ fontWeight: 700, color: t.heading, fontSize: "0.88rem" }}>
-                                        ₹{bill.grandTotal?.toLocaleString("en-IN")}
-                                    </div>
-                                    {bill.dueAmount > 0 && (
-                                        <div style={{ fontSize: "0.69rem", color: "#dc2626", marginTop: 3, fontWeight: 600 }}>
-                                            Due ₹{bill.dueAmount?.toLocaleString("en-IN")}
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Report status — wider pill with full label */}
-                                <div style={{ padding: "16px 12px" }}>
-                                    <span style={{
-                                        display: "inline-flex", alignItems: "center", gap: 6,
-                                        padding: "6px 14px", borderRadius: 20,
-                                        background: statusCfg.bg, color: statusCfg.color,
-                                        fontSize: "0.75rem", fontWeight: 600,
-                                        border: `1px solid ${statusCfg.dot}44`,
-                                        whiteSpace: "nowrap",
-                                    }}>
-                                        <span style={{
-                                            width: 7, height: 7, borderRadius: "50%", background: statusCfg.dot, flexShrink: 0,
-                                            boxShadow: `0 0 5px ${statusCfg.dot}`,
-                                        }} />
-                                        {statusCfg.label}
-                                    </span>
-                                </div>
-
-                                {/* Action button — full width, styled per status */}
-                                <div style={{ padding: "16px 16px 16px 8px", display: "flex" }}>
-                                    <button
-                                        onClick={() => onSelect(bill)}
-                                        style={{
-                                            width: "100%",
-                                            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                                            padding: "9px 12px", borderRadius: 9,
-                                            border: `1.5px solid ${actionCfg.border}`,
-                                            background: actionCfg.bg,
-                                            color: actionCfg.color,
-                                            fontSize: "0.78rem", fontWeight: 700, cursor: "pointer",
-                                            fontFamily: "'DM Sans',sans-serif", whiteSpace: "nowrap",
-                                            transition: "opacity .15s",
-                                        }}
-                                        onMouseEnter={e => e.currentTarget.style.opacity = "0.8"}
-                                        onMouseLeave={e => e.currentTarget.style.opacity = "1"}
-                                    >
-                                        <ActionIcon size={13} /> {actionCfg.label}
-                                    </button>
-                                </div>
-                            </div>
-                        );
-                    })}
+                                bill={bill}
+                                reportMap={reportMap}
+                                onSelect={onSelect}
+                                t={t}
+                                isLast={i === filtered.length - 1}
+                            />
+                        ))
+                    )}
                 </div>
             )}
         </div>
@@ -591,7 +666,8 @@ function ReportEntryForm({ t, isDark, billId, bill, patient, onBack }) {
                 }
                 const rep = r.data.report;
                 setReport(rep);
-                setLocalData(JSON.parse(JSON.stringify(rep.testResults)));
+                // structuredClone: faster + safer deep clone than JSON.parse(JSON.stringify())
+                setLocalData(structuredClone(rep.testResults));
                 setLabDoctor(rep.labDoctor || "");
                 setLabDegree(rep.labDegree || "");
                 setNotes(rep.notes || "");
@@ -630,7 +706,7 @@ function ReportEntryForm({ t, isDark, billId, bill, patient, onBack }) {
         ));
     }, []);
 
-    const handleSave = async (verify = false) => {
+    const handleSave = useCallback(async (verify = false) => {
         try {
             setSaving(true);
             await saveValues(billId, { testResults: localData, labDoctor, labDegree, notes });
@@ -640,15 +716,31 @@ function ReportEntryForm({ t, isDark, billId, bill, patient, onBack }) {
         } catch (err) {
             setToast({ msg: err.response?.data?.message || "Failed to save.", type: "error" });
         } finally { setSaving(false); }
-    };
+    }, [billId, localData, labDoctor, labDegree, notes]);
 
-    const totalParams = localData.reduce((s, t) => s + t.paramResults.filter(p => p.fieldType !== "heading").length, 0);
-    const filledParams = localData.reduce((s, t) => s + t.paramResults.filter(p => p.fieldType !== "heading" && p.value !== "").length, 0);
-    const abnormalCount = localData.reduce((s, t) => s + t.paramResults.filter(p => p.isAbnormal).length, 0);
-    const pct = totalParams > 0 ? Math.round((filledParams / totalParams) * 100) : 0;
+    // Single pass over localData for all three aggregate stats instead of
+    // 3 separate .reduce() traversals of every test's paramResults.
+    const { totalParams, filledParams, abnormalCount, pct } = useMemo(() => {
+        let totalParams = 0, filledParams = 0, abnormalCount = 0;
+        for (const tr of localData) {
+            for (const p of tr.paramResults) {
+                if (p.fieldType === "heading") continue;
+                totalParams++;
+                if (p.value !== "") filledParams++;
+                if (p.isAbnormal) abnormalCount++;
+            }
+        }
+        return {
+            totalParams, filledParams, abnormalCount,
+            pct: totalParams > 0 ? Math.round((filledParams / totalParams) * 100) : 0,
+        };
+    }, [localData]);
 
     const overallStatus = report?.status || "pending";
-    const reportForPrint = report ? { ...report, testResults: localData, labDoctor, labDegree, notes } : null;
+    const reportForPrint = useMemo(
+        () => report ? { ...report, testResults: localData, labDoctor, labDegree, notes } : null,
+        [report, localData, labDoctor, labDegree, notes]
+    );
 
     if (loading) return (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", gap: 12, color: t.muted }}>
@@ -786,6 +878,8 @@ function ReportEntryForm({ t, isDark, billId, bill, patient, onBack }) {
 export default function ReportEntry({ t, isDark }) {
     const [selectedBill, setSelectedBill] = useState(null);
 
+    const handleBack = useCallback(() => setSelectedBill(null), []);
+
     if (selectedBill) {
         return (
             <ReportEntryForm
@@ -793,7 +887,7 @@ export default function ReportEntry({ t, isDark }) {
                 billId={selectedBill._id}
                 bill={selectedBill}
                 patient={selectedBill.patient}
-                onBack={() => setSelectedBill(null)}
+                onBack={handleBack}
             />
         );
     }
