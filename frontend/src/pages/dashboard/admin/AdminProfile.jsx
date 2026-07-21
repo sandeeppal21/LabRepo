@@ -7,8 +7,6 @@ import {
     RiUploadCloud2Line, RiImageLine, RiDeleteBinLine,
     RiShieldUserLine, RiMicroscopeLine,
 } from "react-icons/ri";
-// Same service the vendor profile screen uses — /profile/me is generic on
-// req.user.id, role doesn't matter, so there's no separate admin endpoint.
 import { fetchProfile, saveLabDetails, updatePassword } from "../../../services/profileService";
 
 // ── Shared input style ────────────────────────────────────

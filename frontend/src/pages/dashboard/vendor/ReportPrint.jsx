@@ -1,26 +1,3 @@
-/**
- * ReportPrint.jsx
- *
- * Printable lab report using the native <thead>/<tfoot> repeating-header trick:
- *  - <thead> = letterhead + patient info box — repeats identically on every printed page
- *  - <tfoot> = signatures — always pinned to bottom of page, repeats on every printed page
- *  - <tbody> = test results, one <tr> per logical block — browser naturally flows/breaks
- *    between rows, so long content (like Clinical Notes) continues onto the next page
- *    instead of being visually clipped.
- *  - A trailing spacer <tr height:100%> in <tbody> absorbs any leftover vertical space
- *    on the last page, so <tfoot> (signatures) always sits flush at the bottom of the
- *    page — whether the report has 1 test or 20.
- *
- * Props:
- *   report  — ReportEntry document (with testResults + paramResults)
- *   bill    — Bill document
- *   patient — Patient document
- *   vendor  — Vendor/User document (full profile: logo, businessName, staff[], etc.)
- *   onClose — close handler
- *
- * Install: npm install qrcode.react
- */
-
 import React, { useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { RiPrinterLine, RiCloseLine, RiDownloadLine } from "react-icons/ri";
@@ -36,17 +13,7 @@ const fmtDateShort = (d) => {
     return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()}`;
 };
 
-// ── Resolve a staff signature image URL from various possible shapes ──
-// Uploads (signatures, logos, etc.) are served as static files from the
-// backend's origin — NOT through the /api-prefixed axios baseURL. So this
-// needs its own env var, same pattern as api.js but without the /api suffix.
-//
-// Add to your .env files (Vite):
-//   .env.development → VITE_UPLOADS_BASE_URL=http://localhost:5000
-//   .env.production  → VITE_UPLOADS_BASE_URL=https://your-deployed-backend.com
-//
-// (If you're on Create React App instead of Vite, use
-//  process.env.REACT_APP_UPLOADS_BASE_URL and prefix env vars with REACT_APP_.)
+
 const API_BASE = import.meta.env.VITE_UPLOADS_BASE_URL || "http://localhost:5000";
 const resolveSignatureUrl = (doc) => {
     if (!doc) return "";
@@ -57,17 +24,6 @@ const resolveSignatureUrl = (doc) => {
     return "";
 };
 
-// ── Print trigger ─────────────────────────────────────────────────
-// NOTE: We deliberately do NOT rely on CSS (e.g. table height:100vh) to push
-// the signature tfoot to the bottom of the page — Chromium's print engine
-// does not reliably distribute a table's specified height down into an
-// auto-height tbody row, so that approach leaves the signature floating
-// right under the content instead of flush at the page bottom.
-//
-// Instead, right before printing, we MEASURE the actual rendered heights of
-// thead/tfoot/tbody in pixels and set the spacer row's height explicitly,
-// so the signature block is mathematically guaranteed to land at the exact
-// bottom of the last page — whether the report has 1 test or 20.
 function doPrint(html) {
     const win = window.open("", "_blank", "width=850,height=1100");
     win.document.write(`<!DOCTYPE html><html><head>
@@ -244,10 +200,6 @@ export default function ReportPrint({ report, bill, patient, vendor, onClose }) 
     );
 }
 
-// ══════════════════════════════════════════════════════════════════
-// REPORT DOCUMENT — a single master <table> so thead/tfoot repeat
-// natively on every printed page, and tbody rows flow/break normally.
-// ══════════════════════════════════════════════════════════════════
 function ReportDocument({ report, bill, patient, vendor, patientName, reportUrl, passCode }) {
     // Group testResults by department
     const byDept = {};
@@ -412,8 +364,6 @@ function ReportDocument({ report, bill, patient, vendor, patientName, reportUrl,
                                         </td>
                                     </tr>
 
-                                    {/* Interpretation / Clinical Notes — its own row, allowed to FLOW across pages
-                                        if too long (this is what fixes the visible clipping bug) */}
                                     {testResult.interpretation && testResult.interpretation.trim() && (
                                         <tr className="row-flow">
                                             <td style={{ padding: "0 36px 10px" }}>
@@ -440,12 +390,7 @@ function ReportDocument({ report, bill, patient, vendor, patientName, reportUrl,
                         </tr>
                     )}
 
-                    {/* Spacer row — height is calculated and set in px by JS in doPrint(),
-                        right before window.print() is called, based on the actual measured
-                        height of thead/tfoot/tbody. This pushes tfoot (signatures) flush to
-                        the bottom of the last page, no matter how few or many test results
-                        are above it. Renders as an empty, borderless cell in print preview
-                        until the script sets its height. */}
+
                     <tr className="row-spacer" aria-hidden="true">
                         <td />
                     </tr>

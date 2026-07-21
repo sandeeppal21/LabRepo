@@ -1,37 +1,3 @@
-/**
- * ReportEntry.jsx
- *
- * Two views:
- *  1. BillPicker  — lists all bills + their report status
- *  2. ReportEntryForm — enter/edit values for a specific bill
- *
- * Report Status Flow:
- *   No report yet → "Pending"  (grey)
- *   Initialized   → "Pending"  (grey)
- *   partial       → "Partial"  (yellow)
- *   completed     → "Completed"(blue)
- *   verified      → "Verified" (green)
- *
- * ── PERF NOTES ──────────────────────────────────────────────────────
- * - StatusPill / FlagBadge / ParamRow / TestSection / BillRow wrapped in
- *   React.memo. To make memo actually pay off, callbacks passed down
- *   (onChange, onSelect) are STABLE references (useCallback in parents)
- *   instead of new arrow functions created on every render.
- * - Per-test filled/total/abnormal/sorted-params are computed once per
- *   testResult via a single useMemo loop instead of 3 separate
- *   .filter()/.sort() passes on every render.
- * - BillPicker's filtered/dateBills/counts/quick-range flags are all
- *   useMemo'd against their real dependencies instead of recomputing
- *   (and re-filtering the whole bills array) on every render.
- * - Row hover uses a CSS class + custom property instead of inline
- *   onMouseEnter/onMouseLeave JS handlers.
- * - Bill list virtualizes with react-window once the filtered list gets
- *   large, so we're not mounting hundreds of DOM rows at once.
- * - structuredClone replaces JSON.parse(JSON.stringify(...)) for the
- *   deep clone of report.testResults.
- * ─────────────────────────────────────────────────────────────────────
- */
-
 import { memo, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { FixedSizeList as List } from "react-window";
 import {
@@ -87,10 +53,6 @@ const FlagBadge = memo(function FlagBadge({ flag }) {
     );
 });
 
-// ── Param row ──────────────────────────────────────────────────────
-// Takes `testResultId` + the stable `onChange` (== handleParamChange from
-// the form, already useCallback'd) instead of a fresh inline arrow fn per
-// row per render — that's what lets memo actually skip unrelated rows.
 const ParamRow = memo(function ParamRow({ param, testResultId, onChange, t, isDark }) {
     const isHeading = param.fieldType === "heading";
     const isAbnormal = param.flag === "H" || param.flag === "L";
@@ -150,9 +112,6 @@ const ParamRow = memo(function ParamRow({ param, testResultId, onChange, t, isDa
 const TestSection = memo(function TestSection({ testResult, t, isDark, onParamChange, onInterpretChange, isActive, onSelect }) {
     const [showInterp, setShowInterp] = useState(false);
 
-    // One pass over paramResults instead of 3 separate .filter() calls,
-    // plus a memoized sorted copy instead of sorting the live array in
-    // render (the old code called .sort() — which mutates — on every render).
     const { filled, total, abnormal, pct, sortedParams } = useMemo(() => {
         let filled = 0, total = 0, abnormal = 0;
         for (const p of testResult.paramResults) {
@@ -586,8 +545,6 @@ function BillPicker({ t, isDark, onSelect }) {
                             </p>
                         </div>
                     ) : filtered.length > VIRTUALIZE_THRESHOLD ? (
-                        // Virtualized: only the ~7-8 rows actually in the viewport get mounted,
-                        // regardless of whether filtered has 100 or 10,000 bills.
                         <List
                             height={Math.min(filtered.length * ROW_HEIGHT, 640)}
                             itemCount={filtered.length}
@@ -623,9 +580,7 @@ function BillPicker({ t, isDark, onSelect }) {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════
-// REPORT ENTRY FORM
-// ══════════════════════════════════════════════════════════════════
+
 function ReportEntryForm({ t, isDark, billId, bill, patient, onBack }) {
     const [report, setReport] = useState(null);
     const [localData, setLocalData] = useState([]);
@@ -718,8 +673,6 @@ function ReportEntryForm({ t, isDark, billId, bill, patient, onBack }) {
         } finally { setSaving(false); }
     }, [billId, localData, labDoctor, labDegree, notes]);
 
-    // Single pass over localData for all three aggregate stats instead of
-    // 3 separate .reduce() traversals of every test's paramResults.
     const { totalParams, filledParams, abnormalCount, pct } = useMemo(() => {
         let totalParams = 0, filledParams = 0, abnormalCount = 0;
         for (const tr of localData) {

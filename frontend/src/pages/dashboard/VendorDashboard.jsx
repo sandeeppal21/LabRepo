@@ -40,9 +40,6 @@ import BillReceipt from "./vendor/BillReceipt";
 import VendorAnalysis from "./vendor/VendorAnalysis";
 import PaymentGate from "../../components/PaymentGate";
 
-// ── Nav config ─────────────────────────────────────────────
-// `tab` matches the :tab URL param.
-// overview has tab="" (no param = default route).
 const NAV = [
     { tab: "", label: "Analysis", icon: RiDashboardLine },
     { tab: "billregistration", label: "Bill/Registration", icon: RiUserAddLine },
@@ -93,15 +90,16 @@ export default function VendorDashboard() {
 
 
     const navigate = useNavigate();
-    const { tab } = useParams();           // "" | "reports" | "profile" | …
-    const activeTab = tab || "";             // normalise undefined → ""
+    const { tab } = useParams();
+    const activeTab = tab || "";
 
     const t = isDark ? T.dark : T.light;
     const activeLabel = NAV.find(n => n.tab === activeTab)?.label || "Overview";
 
-    // ✅ ADD THIS — vendorInfo was never defined before
+    //  ADD THIS — vendorInfo was never defined before
     const vendorInfo = {
-        vendorId: localStorage.getItem("vendorId") || "",
+        vendorId: localStorage.getItem("userId") || "",
+        vendorCode: localStorage.getItem("vendorId") || "",
         name: localStorage.getItem("name") || "",
         businessName: localStorage.getItem("businessName") || "",
         address: localStorage.getItem("address") || "",
@@ -154,7 +152,7 @@ export default function VendorDashboard() {
                     {/* Business chip */}
                     {!collapsed && (
                         <div style={{ background: t.accentBg, border: `1px solid ${t.accentRing}`, borderRadius: 10, padding: "9px 12px", marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
-                            {/* Logo or building icon */}
+
                             {vendorInfo.logoUrl ? (
                                 <img
                                     src={vendorInfo.logoUrl}
@@ -251,7 +249,7 @@ export default function VendorDashboard() {
                                         }}
                                     />
                                 ) : null}
-                                {/* Initials fallback — hidden when logo loads, shown when logo missing/broken */}
+
                                 <div style={{
                                     width: 30, height: 30, borderRadius: 8, flexShrink: 0,
                                     background: "linear-gradient(135deg,#38bdf8,#06b6d4)",
@@ -262,7 +260,7 @@ export default function VendorDashboard() {
                                     {initials}
                                 </div>
                                 <div>
-                                    {/* <div style={{ fontSize: "0.81rem", fontWeight: 600, color: t.heading, lineHeight: 1.2 }}>{businessName || name}</div> */}
+
                                     <div style={{ fontSize: "0.67rem", color: t.muted }}>{name}</div>
                                 </div>
                             </div>
@@ -281,7 +279,7 @@ export default function VendorDashboard() {
                         {activeTab === "billregistration" && <BillRegistration t={t} isDark={isDark} />}
 
 
-                        {/* {activeTab === "vendorbilling" && <VendorBilling t={t} isDark={isDark} />} */}
+
 
                         {activeTab === "vendorbilling" && (
                             <VendorBilling t={t} isDark={isDark} onPrintBill={setPrintBill} />
@@ -300,14 +298,14 @@ export default function VendorDashboard() {
 
 
 
-                        {/* ── TEST CATALOGUE ── */}
-                        {activeTab === "catalogue" && <VendorTest t={t} isDark={isDark} />}
+
+                        {activeTab === "catalogue" && <VendorTest t={t} currentVendorId={vendorInfo.vendorId} />}
 
 
                         {activeTab === "doctorreferral" && <VendorReferrals t={t} isDark={isDark} />}
 
 
-                        {/* ── PROFILE — content-only component, no sidebar/header ── */}
+
                         {activeTab === "profile" && <VendorProfile t={t} isDark={isDark} />}
 
                         {/* ── SUPPORT ── */}

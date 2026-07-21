@@ -54,7 +54,7 @@ const STATUS = {
 
 export default function PublicReport() {
     const { billId } = useParams();
-    const [data, setData] = useState(null);  // { bill, report, vendor }
+    const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [printing, setPrinting] = useState(false);
@@ -65,7 +65,7 @@ export default function PublicReport() {
     useEffect(() => {
         (async () => {
             try {
-                // Public endpoint — no auth needed
+
                 const res = await api.get(`/public/report/${billId}`);
                 setData(res.data);
             } catch (err) {
@@ -160,8 +160,6 @@ export default function PublicReport() {
                     </div>
                 </div>
 
-                {/* ── Status banner ── */}
-                {/* ── ReportPrint modal ── */}
                 {showReport && fullReport && (
                     <ReportPrint
                         report={fullReport.report}
@@ -184,7 +182,7 @@ export default function PublicReport() {
                         </div>
                     </div>
 
-                    {/* ✅ Print button — only shows when verified */}
+                    {/*  Print button — only shows when verified */}
                     {status === "verified" && (
                         <div style={{ flexShrink: 0 }}>
                             <button

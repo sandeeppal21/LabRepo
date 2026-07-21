@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { RiMicroscopeLine } from "react-icons/ri";
 import { FiEye, FiEyeOff, FiAlertCircle } from "react-icons/fi";
 import api from "../../services/api";
+import { decodeJwtPayload } from "../../utils/jwt";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -32,7 +33,7 @@ export default function Login() {
       // ── Persist auth info ────────────────────────────────
       localStorage.setItem("token", token);
       localStorage.setItem("role", role);
-      localStorage.setItem("vendorId", vendorId || "");
+      localStorage.setItem("vendorId", vendorId || ""); // human-readable code e.g. VND-0FF31FD5
       localStorage.setItem("name", name || "");
       localStorage.setItem("businessName", businessName || "");
       localStorage.setItem("logoUrl", logoUrl || "");
@@ -41,6 +42,12 @@ export default function Login() {
       localStorage.setItem("state", res.data.state || "");
       localStorage.setItem("phone", res.data.phone || "");
       localStorage.setItem("email", res.data.email || "");
+
+      // ── Real Mongo _id, pulled from the JWT payload ──────
+      // This is the id your backend uses for Test.createdBy, req.user.id,
+      // etc. — NOT the same as the VND-xxxx vendorId code above.
+      const decoded = decodeJwtPayload(token);
+      localStorage.setItem("userId", decoded?.id || "");
 
       // ── Route by role ────────────────────────────────────
       if (role === "admin") return navigate("/dashboard/admin");

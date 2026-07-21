@@ -1,34 +1,3 @@
-/**
- * BillRegistration.jsx
- *
- * Optimization pass over the previous version. Same three components
- * (QuickAddDoctorModal, ReferralDoctorDropdown, BillingModal, and the
- * default-exported BillRegistration) — nothing was split into new files,
- * per request. Changes are flagged inline with FIX: / OPT: comments so
- * they're easy to find when you do split this up later.
- *
- * Summary of what changed:
- *  FIX: `catch { ... err }` in the vendor profile fetch referenced an
- *       undefined `err` — now `catch (err)`.
- *  OPT: Label / FieldErr / Toast wrapped in React.memo — they re-rendered
- *       on every keystroke of every unrelated field before.
- *  OPT: Inline style-object factories (`inp`, `inpCls`) hoisted to module
- *       scope instead of being redefined inside component bodies on every
- *       render.
- *  OPT: Doctor filtering (search-in-dropdown) and test filtering
- *       (search-in-billing) moved to useMemo instead of recomputing on
- *       every render / doing an extra useEffect+setState round trip.
- *  OPT: Billing totals (subtotal/discount/grandTotal/due) moved to
- *       useMemo so they aren't recalculated when unrelated state
- *       (e.g. notes, dispatch method) changes.
- *  OPT: Event handlers passed to lists/children wrapped in useCallback so
- *       memoized children don't re-render needlessly.
- *  OPT: Related discount fields (`discountPct`, `discountAmt`,
- *       `discountReason`) consolidated into one state object instead of
- *       three separate useState calls — cuts hook count and gives one
- *       update path.
- */
-
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
 import {
     RiUserAddLine, RiCloseLine, RiSearchLine,
@@ -46,8 +15,7 @@ import {
 import { fetchReferrals, createReferral } from "../../../services/referralService";
 import BillReceipt from "./BillReceipt";
 import CustomSelect from "../../../components/common/CustomSelect";
-import { fetchProfile } from "../../../services/profileService"; // adjust path/name
-
+import { fetchProfile } from "../../../services/profileService";
 // ── Constants ──────────────────────────────────────────────────
 const DESIGNATIONS = ["MR.", "MRS.", "MS.", "DR.", "MASTER", "BABY"];
 const GENDERS = ["male", "female", "other"];
@@ -61,10 +29,6 @@ const EMPTY_FORM = {
 };
 const EMPTY_DISCOUNT = { pct: 0, amt: 0, reason: "" };
 
-// ── Shared style helpers ──────────────────────────────────────
-// OPT: these used to be re-declared as closures inside component bodies
-// (e.g. `inp` inside QuickAddDoctorModal) — now they're plain module-level
-// functions, so no new function identity is allocated per render.
 const inpCls = (t, err) => ({
     width: "100%", background: t.inputBg,
     border: `1.5px solid ${err ? "rgba(239,68,68,0.5)" : t.accentRing}`,
@@ -80,8 +44,7 @@ const quickAddInpCls = (t, hasErr) => ({
     fontSize: "0.85rem", fontFamily: "'DM Sans',sans-serif", outline: "none",
 });
 
-// OPT: memoized — these render dozens of times per page (once per field)
-// and only need to update when their own props or the theme change.
+
 const Label = memo(function Label({ text, t, required }) {
     return (
         <label style={{ fontSize: "0.68rem", fontWeight: 600, color: t.muted, letterSpacing: "0.08em", textTransform: "uppercase", display: "block", marginBottom: 5 }}>
@@ -119,9 +82,6 @@ const QuickAddDoctorModal = memo(function QuickAddDoctorModal({ t, onClose, onAd
     const [saving, setSaving] = useState(false);
     const [saveErr, setSaveErr] = useState("");
 
-    // OPT: useCallback so this stable identity doesn't force child inputs
-    // to re-bind onChange every render (matters less here since inputs
-    // are plain DOM elements, but keeps the pattern consistent and cheap).
     const setF = useCallback((k, v) => {
         setForm(f => ({ ...f, [k]: v }));
         setErrs(e => ({ ...e, [k]: "" }));
@@ -155,10 +115,7 @@ const QuickAddDoctorModal = memo(function QuickAddDoctorModal({ t, onClose, onAd
             const newDoc = res.data.data;
             onAdded({ id: newDoc._id.toString(), name: newDoc.name, degree: newDoc.degree || "" });
         } catch (err) {
-            // FIX: previously `err.response` was read outside any catch
-            // parameter scope in one branch of this file — kept correct
-            // here, but see the vendor-profile fetch below for the actual
-            // bug that existed in the original.
+
             setSaveErr(err.response?.data?.message || err.message);
         } finally {
             setSaving(false);
@@ -244,14 +201,8 @@ const QuickAddDoctorModal = memo(function QuickAddDoctorModal({ t, onClose, onAd
     );
 });
 
-// ══════════════════════════════════════════════════════════════
-// REFERRAL DOCTOR DROPDOWN
-// ══════════════════════════════════════════════════════════════
 const ReferralDoctorDropdown = memo(function ReferralDoctorDropdown({ t, value, onChange, error, onQuickAdd, doctors, doctorsLoading }) {
-    // OPT: `doctors` and `doctorsLoading` are now passed in as props,
-    // fetched once by the parent (see useReferralDoctors below) instead of
-    // each dropdown instance (this one AND the one inside BillingModal)
-    // independently hitting the network for the same list.
+
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
     const wrapperRef = useRef();
@@ -267,10 +218,6 @@ const ReferralDoctorDropdown = memo(function ReferralDoctorDropdown({ t, value, 
         return () => document.removeEventListener("mousedown", handler);
     }, []);
 
-    // OPT: was a plain `.filter()` call executed inline in the render body
-    // on every render (including renders triggered by `open` toggling,
-    // which has nothing to do with the filtered result). Now only
-    // recomputes when the doctor list or the query actually changes.
     const filtered = useMemo(() => {
         if (!query.trim()) return doctors;
         const q = query.toLowerCase();
@@ -435,8 +382,7 @@ const BillingModal = memo(function BillingModal({ patient, t, isDark, onClose, o
     const [selectedTests, setSelectedTests] = useState([]);
     const [loadingTests, setLoadingTests] = useState(true);
 
-    // OPT: three separate discount states consolidated into one object —
-    // fewer hooks, and one place to reset/update them together.
+
     const [discount, setDiscount] = useState(EMPTY_DISCOUNT);
 
     const [isDue, setIsDue] = useState(false);
@@ -457,8 +403,7 @@ const BillingModal = memo(function BillingModal({ patient, t, isDark, onClose, o
                 const r = await fetchVendorTests();
                 setAllTests(r.data.tests.filter(test => test.priceSet && test.vendorIsActive));
             } catch (err) {
-                // FIX: silent empty catch previously swallowed load errors
-                // with no visibility at all — at least log now.
+
                 console.error("TEST CATALOGUE FETCH ERROR:", err);
             } finally {
                 setLoadingTests(false);
@@ -466,10 +411,6 @@ const BillingModal = memo(function BillingModal({ patient, t, isDark, onClose, o
         })();
     }, []);
 
-    // OPT: was a useEffect + separate `testResults` state that triggered
-    // an extra render every time the user typed (setTestSearch → effect
-    // fires → setTestResults → second render). Now it's a single
-    // synchronous memo computed in the same render as the keystroke.
     const testResults = useMemo(() => {
         if (!testSearch.trim()) return [];
         const q = testSearch.toLowerCase();
@@ -497,11 +438,7 @@ const BillingModal = memo(function BillingModal({ patient, t, isDark, onClose, o
         setSelectedTests(p => p.map(i => i.testId === id ? { ...i, [k]: v } : i));
     }, []);
 
-    // OPT: subtotal/discount/total/due were plain `const`s recomputed on
-    // *every* render of BillingModal — including renders triggered by
-    // typing in the Notes field or toggling Urgent, neither of which
-    // affects these numbers. useMemo scopes recomputation to the actual
-    // dependencies.
+
     const { subtotal, totalDiscount, grandTotal, due } = useMemo(() => {
         const sub = selectedTests.reduce((s, i) => s + Math.max(0, i.price - (i.discount || 0)), 0);
         const pctValue = Math.round(sub * (Number(discount.pct) || 0) / 100);
@@ -548,7 +485,7 @@ const BillingModal = memo(function BillingModal({ patient, t, isDark, onClose, o
     const handleDoctorAdded = useCallback((doc) => {
         setReferringDoctor(doc);
         setShowQuickAdd(false);
-        onDoctorAdded?.(doc); // OPT: bubble up so the shared cache updates too
+        onDoctorAdded?.(doc);
     }, [onDoctorAdded]);
 
     return (
@@ -771,10 +708,7 @@ export default function BillRegistration({ t, isDark }) {
         state: "",
     });
 
-    // OPT: doctor list is now fetched exactly once, here, and passed down
-    // as props to both ReferralDoctorDropdown instances (the one on this
-    // page and the one inside BillingModal) instead of each of them
-    // independently calling fetchReferrals on mount.
+
     const [doctors, setDoctors] = useState([]);
     const [doctorsLoading, setDoctorsLoading] = useState(true);
 
@@ -802,11 +736,6 @@ export default function BillRegistration({ t, isDark }) {
                 const res = await fetchProfile();
                 setVendor(v => ({ ...v, ...res.data.user }));
             } catch (err) {
-                // FIX: original was `catch { console.log(..., err) }` —
-                // `err` isn't in scope for a parameter-less catch, so this
-                // threw a ReferenceError inside the catch handler itself
-                // any time the profile fetch actually failed, hiding the
-                // real error. Now the parameter is captured properly.
                 console.error("PROFILE FETCH ERROR:", err);
             }
         })();
@@ -832,8 +761,6 @@ export default function BillRegistration({ t, isDark }) {
                 setSearching(false);
             }
         }, 400);
-        // OPT: clear the pending debounce on unmount so a slow response
-        // can't call setState after the component is gone.
         return () => clearTimeout(searchTimeout.current);
     }, [patientSearch]);
 

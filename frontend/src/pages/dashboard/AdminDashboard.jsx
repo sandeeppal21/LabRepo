@@ -20,15 +20,16 @@ import {
   RiSunLine,
   RiMoonLine,
 } from "react-icons/ri";
-import { T } from "../../utils/theme"; // ← same shared theme file VendorDashboard uses
+import { RiTestTubeLine } from "react-icons/ri";
+import { T } from "../../utils/theme";
 import AdminProfile from "./admin/AdminProfile";
 import AdminVendors from "./admin/AdminVendors";
+import VendorTest from "./vendor/VendorTest";
 
-// ── Nav config ─────────────────────────────────────────────
-// `tab` matches the :tab URL param. Dashboard has tab="" (default route).
 const NAV = [
   { tab: "", label: "Dashboard", icon: RiDashboardLine },
   { tab: "vendors", label: "Vendors", icon: RiUserLine },
+  { tab: "catalogue", label: "Test Catalogue", icon: RiTestTubeLine },
   { tab: "reports", label: "Reports", icon: RiFileList3Line },
   { tab: "billing", label: "Billing", icon: RiBillLine },
   { tab: "settings", label: "Settings", icon: RiSettings4Line },
@@ -299,9 +300,11 @@ export default function AdminDashboard() {
             </>
           )}
 
-          {/* ── VENDORS / REPORTS / BILLING / SETTINGS — build one by one ── */}
-          {/* {activeTab === "vendors" && <PlaceholderPage label="Vendors" t={t} />} */}
+
           {activeTab === "vendors" && <AdminVendors t={t} />}
+          {activeTab === "catalogue" && (
+            <VendorTest t={t} role="admin" currentUserId={localStorage.getItem("userId") || ""} />
+          )}
           {activeTab === "reports" && <PlaceholderPage label="Reports" t={t} />}
           {activeTab === "billing" && <PlaceholderPage label="Billing" t={t} />}
           {activeTab === "settings" && <PlaceholderPage label="Settings" t={t} />}

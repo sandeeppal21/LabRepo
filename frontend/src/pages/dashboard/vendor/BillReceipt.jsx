@@ -1,16 +1,3 @@
-/**
- * BillReceipt.jsx
- *
- * Printable bill receipt — matches the sample image style.
- * Shows: lab header, patient info, test list, totals, QR code, Net ID/Pass.
- *
- * Usage:
- *   <BillReceipt bill={billObj} vendor={vendorObj} onClose={() => ...} />
- *
- * Print: Renders a hidden print-only div that appears on window.print()
- * QR code: Uses qrcode.react library  →  npm install qrcode.react
- */
-
 import { useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { RiPrinterLine, RiCloseLine, RiDownloadLine } from "react-icons/ri";

@@ -1,22 +1,3 @@
-/**
- * CustomSelect.jsx
- *
- * Reusable styled dropdown — matches the dark/light theme exactly.
- * Same style as the Referring Doctor dropdown in NewRegistration.
- * Opens downward with smooth animation.
- *
- * Usage:
- *   <CustomSelect
- *     t={t}
- *     value={form.designation}
- *     onChange={(val) => set("designation", val)}
- *     options={["MR.", "MRS.", "MS.", "DR.", "MASTER", "BABY"]}
- *     label="Designation"
- *     placeholder="Select..."
- *   />
- *
- * File: src/components/common/CustomSelect.jsx
- */
 
 import { useState, useEffect, useRef } from "react";
 import { RiArrowDownSLine, RiCheckboxCircleLine } from "react-icons/ri";
