@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { FixedSizeList as List } from "react-window";
+// import { FixedSizeList as List } from "react-window";
 import {
     RiArrowLeftLine, RiSaveLine, RiCheckboxCircleLine,
     RiPrinterLine, RiLoader4Line, RiAlertLine,
@@ -545,7 +545,7 @@ function BillPicker({ t, isDark, onSelect }) {
                             </p>
                         </div>
                     ) : filtered.length > VIRTUALIZE_THRESHOLD ? (
-                        <List
+                        <div
                             height={Math.min(filtered.length * ROW_HEIGHT, 640)}
                             itemCount={filtered.length}
                             itemSize={ROW_HEIGHT}
@@ -561,7 +561,7 @@ function BillPicker({ t, isDark, onSelect }) {
                                     isLast={index === filtered.length - 1}
                                 />
                             )}
-                        </List>
+                        </div>
                     ) : (
                         filtered.map((bill, i) => (
                             <BillRow
