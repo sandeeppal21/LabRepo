@@ -42,11 +42,6 @@ exports.getPublicReport = async (req, res) => {
     }
 };
 
-// ═══════════════════════════════════════════════════════════
-// GET /api/public/report/:billId/full
-// Returns FULL report data (only if status === "verified")
-// Used by patient to view/print the report
-// ═══════════════════════════════════════════════════════════
 exports.getFullReport = async (req, res) => {
     try {
         const bill = await Bill.findById(req.params.billId)
