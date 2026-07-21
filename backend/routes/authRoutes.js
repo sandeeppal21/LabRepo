@@ -1,9 +1,9 @@
 // backend/routes/authRoutes.js
 
-const express    = require("express");
-const upload     = require("../config/multer");
-const auth       = require("../middleware/authMiddleware");
-const adminOnly  = require("../middleware/adminMiddleware");
+const express = require("express");
+const upload = require("../config/multer");
+const auth = require("../middleware/authMiddleware");
+const adminOnly = require("../middleware/adminMiddleware");
 const {
   register,
   login,
@@ -16,20 +16,12 @@ const {
 
 const router = express.Router();
 
-// ── Middleware: generate vendorId BEFORE multer runs ─────
-// Multer uses req.vendorId to name the uploaded file.
-// Without this, the filename would be a temp name.
+
 const assignVendorId = (req, _res, next) => {
   req.vendorId = "VND-" + require("crypto").randomBytes(4).toString("hex").toUpperCase();
   next();
 };
 
-// ════════════════════════════════════════════════════════
-//  PUBLIC ROUTES
-// ════════════════════════════════════════════════════════
-
-// POST /api/auth/register
-// multipart/form-data — includes optional logo image
 router.post(
   "/register",
   assignVendorId,                   // 1. generate VND-XXXXXXXX
@@ -40,15 +32,8 @@ router.post(
 // POST /api/auth/login
 router.post("/login", login);
 
-// ════════════════════════════════════════════════════════
-//  PROTECTED — any logged-in user
-// ════════════════════════════════════════════════════════
-
-// GET /api/auth/me
 router.get("/me", auth, getMe);
 
-// PATCH /api/auth/update-logo
-// Vendor can update their logo after approval
 router.patch(
   "/update-logo",
   auth,
@@ -61,11 +46,7 @@ router.patch(
   updateLogo
 );
 
-// ════════════════════════════════════════════════════════
-//  ADMIN-ONLY ROUTES
-// ════════════════════════════════════════════════════════
 
-// GET /api/auth/vendors  — list all vendors
 router.get("/vendors", auth, adminOnly, getAllVendors);
 
 // PATCH /api/auth/vendors/:id/approve

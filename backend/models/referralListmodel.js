@@ -1,20 +1,5 @@
-// models/ReferralList.model.js
-//
-// One document per vendor.
-// Structure:
-// {
-//   vendorId: ObjectId,
-//   doctors:        [ ReferralEntrySchema ],
-//   hospitals:      [ ReferralEntrySchema ],
-//   secondReferrals:[ ReferralEntrySchema ],
-//   tpa:            [ ReferralEntrySchema ],
-//   governmentPanels:[ ReferralEntrySchema ],
-//   phlebotomists:  [ ReferralEntrySchema ],
-// }
-
 const mongoose = require("mongoose");
 
-// ── Sub-document schema (one referral entry) ─────────────────
 const ReferralEntrySchema = new mongoose.Schema(
     {
         name: {
@@ -105,9 +90,6 @@ const ReferralListSchema = new mongoose.Schema(
     }
 );
 
-// ── Sparse index: fast lookup of a phone within each category ─
-// We can't enforce uniqueness inside an array at DB level easily,
-// so we handle duplicate-phone check in the controller.
 ReferralListSchema.index({ vendorId: 1 });
 ReferralListSchema.index({ "doctors.phone": 1 });
 ReferralListSchema.index({ "hospitals.phone": 1 });
@@ -118,12 +100,12 @@ ReferralListSchema.index({ "governmentPanels.phone": 1 });
 
 // ── Map: category key → document field name ───────────────────
 ReferralListSchema.statics.FIELD_MAP = {
-    doctor:          "doctors",
-    hospital:        "hospitals",
+    doctor: "doctors",
+    hospital: "hospitals",
     // second_referral: "secondReferrals",
-    tpa:             "tpa",
-    government:      "governmentPanels",
-    phlebotomist:    "phlebotomists",
+    tpa: "tpa",
+    government: "governmentPanels",
+    phlebotomist: "phlebotomists",
 };
 
 module.exports =

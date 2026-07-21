@@ -1,11 +1,6 @@
-// backend/config/multer.js
-// Handles logo file uploads from vendor registration.
-// Saves files to  /uploads/logos/<vendorId>.<ext>
-// Only accepts images; rejects anything else.
-
-const multer  = require("multer");
-const path    = require("path");
-const fs      = require("fs");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 
 // ── Ensure upload directory exists ───────────────────────
 const UPLOAD_DIR = path.join(__dirname, "..", "uploads", "logos");
@@ -24,9 +19,8 @@ const storage = multer.diskStorage({
     // vendorId is generated in the controller BEFORE calling multer,
     // so we attach it to req.vendorId first (see authController).
     const base = req.vendorId || `tmp-${Date.now()}`;
-    const ext  = path.extname(file.originalname).toLowerCase();
+    const ext = path.extname(file.originalname).toLowerCase();
     cb(null, `${base}${ext}`);
-    // → logos/VND-3F8A1C2B.png
   },
 });
 

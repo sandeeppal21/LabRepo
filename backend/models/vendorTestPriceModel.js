@@ -1,17 +1,17 @@
 const mongoose = require("mongoose");
 
 const testPriceEntrySchema = new mongoose.Schema({
-  testId:   { type: mongoose.Schema.Types.ObjectId, ref: "Test", required: true },
-  price:    { type: Number, required: true, min: 0, default: 0 },
+  testId: { type: mongoose.Schema.Types.ObjectId, ref: "Test", required: true },
+  price: { type: Number, required: true, min: 0, default: 0 },
   isActive: { type: Boolean, default: true },
 }, { timestamps: true });
 
 const vendorTestPriceSchema = new mongoose.Schema({
-  vendorId: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: "User",       //  references User model
-    required: true, 
-    unique: true       // one document per vendor
+  vendorId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+    unique: true
   },
   prices: [testPriceEntrySchema],
 }, { timestamps: true });

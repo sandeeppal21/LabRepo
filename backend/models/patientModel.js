@@ -1,13 +1,11 @@
-// backend/models/patientModel.js
-
 const mongoose = require("mongoose");
 
-// ── Auto-generate Patient ID: YYMMDD + 3-digit seq e.g. 260512001 ──
+
 async function generatePatientId() {
-  const today  = new Date();
-  const dd     = String(today.getDate()).padStart(2, "0");
-  const mm     = String(today.getMonth() + 1).padStart(2, "0");
-  const yy     = String(today.getFullYear()).slice(2);
+  const today = new Date();
+  const dd = String(today.getDate()).padStart(2, "0");
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const yy = String(today.getFullYear()).slice(2);
   const prefix = `${yy}${mm}${dd}`;
 
   const last = await mongoose.model("Patient").findOne(
@@ -26,84 +24,80 @@ async function generatePatientId() {
 // ─────────────────────────────────────────────────────────────
 const patientSchema = new mongoose.Schema(
   {
-    // ── Vendor link (custom string ID e.g. "VND-0FF31FD5") ──
     vendorId: {
-      type:     String,
+      type: String,
       required: true,
     },
 
-    // ── Auto-generated unique patient ID e.g. "260512001" ───
     patientId: {
-      type:   String,
-      unique: true,   // index created by unique:true — do NOT add index:true
+      type: String,
+      unique: true,
     },
 
-    // ── Demographics ─────────────────────────────────────────
     designation: {
-      type:    String,
-      enum:    ["MR.", "MRS.", "MS.", "DR.", "MASTER", "BABY"],
+      type: String,
+      enum: ["MR.", "MRS.", "MS.", "DR.", "MASTER", "BABY"],
       default: "MR.",
     },
     firstName: {
-      type:     String,
+      type: String,
       required: [true, "First name is required"],
-      trim:     true,
+      trim: true,
     },
     lastName: {
-      type:    String,
-      trim:    true,
+      type: String,
+      trim: true,
       default: "",
     },
     gender: {
-      type:     String,
-      enum:     ["male", "female", "other"],
+      type: String,
+      enum: ["male", "female", "other"],
       required: [true, "Gender is required"],
     },
     age: {
-      type:     Number,
+      type: Number,
       required: [true, "Age is required"],
-      min:      [0, "Age cannot be negative"],
+      min: [0, "Age cannot be negative"],
     },
     ageType: {
-      type:    String,
-      enum:    ["year", "month", "day"],
+      type: String,
+      enum: ["year", "month", "day"],
       default: "year",
     },
 
     // ── Contact ───────────────────────────────────────────────
     phone: {
-      type:    String,
-      trim:    true,
+      type: String,
+      trim: true,
       default: "",
     },
     email: {
-      type:      String,
-      trim:      true,
+      type: String,
+      trim: true,
       lowercase: true,
-      default:   "",
+      default: "",
     },
     address: {
-      type:    String,
-      trim:    true,
+      type: String,
+      trim: true,
       default: "",
     },
 
     // ── Lab context ───────────────────────────────────────────
     ownerName: {
-      type:    String,
-      trim:    true,
+      type: String,
+      trim: true,
       default: "",
     },
 
-    // Sub-document _id from ReferralList.doctors[] array
-    // No `ref` because Mongoose cannot populate sub-doc _ids directly
+
     referringDoctorId: {
-      type:    mongoose.Schema.Types.ObjectId,
+      type: mongoose.Schema.Types.ObjectId,
       default: null,
     },
     referringDoctorName: {
-      type:    String,
-      trim:    true,
+      type: String,
+      trim: true,
       default: "",
     },
   },
@@ -112,8 +106,7 @@ const patientSchema = new mongoose.Schema(
   }
 );
 
-// ── Indexes ───────────────────────────────────────────────────
-// Rule: declare EITHER index:true on field OR schema.index() — never both.
+
 
 // Primary lookup: all patients for a vendor
 patientSchema.index({ vendorId: 1, createdAt: -1 });

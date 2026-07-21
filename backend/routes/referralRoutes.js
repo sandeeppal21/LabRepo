@@ -1,7 +1,5 @@
-// backend/routes/referralRoutes.js
-
 const express = require("express");
-const router  = express.Router();
+const router = express.Router();
 const protect = require("../middleware/authMiddleware");
 const {
   getStats,
@@ -13,10 +11,10 @@ const {
 
 router.use(protect);
 
-router.get   ("/stats",      getStats);    // GET    /api/referrals/stats
-router.get   ("/",           getEntries);  // GET    /api/referrals?category=doctor&page=1&search=
-router.post  ("/",           createEntry); // POST   /api/referrals
-router.put   ("/:entryId",   updateEntry); // PUT    /api/referrals/:entryId
-router.delete("/:entryId",   deleteEntry); // DELETE /api/referrals/:entryId
+router.get("/stats", getStats);
+router.get("/", getEntries);
+router.post("/", createEntry);
+router.put("/:entryId", updateEntry);
+router.delete("/:entryId", deleteEntry);
 
 module.exports = router;

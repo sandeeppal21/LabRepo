@@ -14,10 +14,8 @@ function computeFlag(value, rangeMin, rangeMax, fieldType) {
   return "N";
 }
 
-// ═══════════════════════════════════════════════════════════
-// POST /api/reports/init/:billId
-// Initialize report entry from bill — creates empty template
-// ═══════════════════════════════════════════════════════════
+
+
 exports.initReport = async (req, res) => {
   try {
     const bill = await Bill.findOne({ _id: req.params.billId, vendorId: req.user.vendorId })
@@ -29,7 +27,7 @@ exports.initReport = async (req, res) => {
     const existing = await ReportEntry.findOne({ billId: bill._id });
     if (existing) return res.status(200).json({ message: "Already initialized.", report: existing });
 
-    // ✅ Fetch all tests in parallel instead of sequential awaits
+
     const testIds = bill.items.map(item => item.testId);
     const tests = await Test.find({ _id: { $in: testIds } });
     const testMap = Object.fromEntries(tests.map(t => [t._id.toString(), t]));
@@ -98,10 +96,7 @@ exports.initReport = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════
-// GET /api/reports/:billId
-// Get report for a bill
-// ═══════════════════════════════════════════════════════════
+
 exports.getReport = async (req, res) => {
   try {
     const report = await ReportEntry
@@ -120,10 +115,7 @@ exports.getReport = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════
-// PUT /api/reports/:billId/values
-// Save entered values for all tests
-// ═══════════════════════════════════════════════════════════
+
 exports.saveValues = async (req, res) => {
   try {
     const report = await ReportEntry.findOne({ billId: req.params.billId, vendorId: req.user.vendorId });
@@ -178,10 +170,6 @@ exports.saveValues = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════
-// PATCH /api/reports/:billId/verify
-// Mark report as verified
-// ═══════════════════════════════════════════════════════════
 exports.verifyReport = async (req, res) => {
   try {
     const report = await ReportEntry.findOne({ billId: req.params.billId, vendorId: req.user.vendorId });
@@ -200,21 +188,18 @@ exports.verifyReport = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════
-// GET /api/reports — List all reports for vendor
-// ═══════════════════════════════════════════════════════════
+
 exports.listReports = async (req, res) => {
   try {
     const { status, page = 1, limit = 20 } = req.query;
 
-    // ✅ Safe number parsing with caps
+
     const pageNum = Math.max(1, parseInt(page) || 1);
     const limitNum = Math.min(100, parseInt(limit) || 20);
 
     const filter = { vendorId: req.user.vendorId };
     if (status) filter.status = status;
 
-    // ✅ lean() for read-only list
     const [reports, total] = await Promise.all([
       ReportEntry.find(filter)
         .populate("patient", "firstName lastName age gender phone patientId")

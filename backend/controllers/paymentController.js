@@ -37,18 +37,12 @@ exports.getSubscriptionStatus = async (req, res) => {
     }
 };
 
-// ═════════════════════════════════════════════════════════
-// POST /api/payment/bypass
-// DEV-ONLY: simulates a successful payment.
-// Grants 3 months of access and stores a dummy transaction id.
-// Remove/guard this route before going to production.
-// ═════════════════════════════════════════════════════════
 exports.bypassPayment = async (req, res) => {
     try {
         const user = await User.findById(req.user.id);
         if (!user) return res.status(404).json({ message: "User not found." });
 
-        // Don't stack access on top of an already-active subscription
+
         if (
             user.subscription?.status === "active" &&
             user.subscription.expiresAt &&

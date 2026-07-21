@@ -1,6 +1,3 @@
-// backend/routes/publicRoutes.js
-// NO auth middleware — these routes are public (accessed via QR scan)
-
 const express = require("express");
 const router = express.Router();
 const { getPublicReport, getFullReport } = require("../controllers/publicController");

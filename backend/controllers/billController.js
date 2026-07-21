@@ -1,5 +1,3 @@
-// backend/controllers/billController.js
-
 const Bill = require("../models/billModel");
 const Patient = require("../models/patientModel");
 const VendorTestPrice = require("../models/vendorTestPriceModel");
@@ -11,10 +9,10 @@ const Test = require("../models/testModel");
 exports.createBill = async (req, res) => {
   try {
     const {
-      patientId,          // Patient _id (MongoDB ObjectId)
-      items,              // [{ testId, isUrgent, discount }]
-      discountPct,        // overall % discount
-      discountAmt,        // overall flat ₹ discount
+      patientId,
+      items,
+      discountPct,
+      discountAmt,
       discountReason,
       discountedBy,
       paymentMode,
@@ -41,16 +39,6 @@ exports.createBill = async (req, res) => {
     for (const item of items) {
       const test = await Test.findById(item.testId);
       if (!test) return res.status(404).json({ message: `Test ${item.testId} not found.` });
-
-      // Get vendor's price for this test
-      //  const priceRecord = await VendorTestPrice.findOne({
-      //     vendorId: req.user.objectId,   // ← real MongoDB ObjectId 
-      //     testId:   item.testId,
-      //     isActive: true,
-      //   });
-
-      //   const price = priceRecord?.price ?? 0;
-
 
       const vendorPriceDoc = await VendorTestPrice.findOne({
         vendorId: req.user.objectId,   // ← real ObjectId (from updated authMiddleware)
@@ -127,57 +115,6 @@ exports.createBill = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════
-// GET /api/bills  — List bills for vendor
-// ═══════════════════════════════════════════════
-// exports.getBills = async (req, res) => {
-//   try {
-//     const { q, status, from, to, page = 1, limit = 20 } = req.query;
-//     const filter = { vendorId: req.user.vendorId };
-
-//     if (status) filter.status = status;
-
-//     if (from || to) {
-//       filter.billingDate = {};
-//       if (from) filter.billingDate.$gte = new Date(from);
-//       if (to) filter.billingDate.$lte = new Date(new Date(to).setHours(23, 59, 59));
-//     }
-
-//     if (q) {
-//       const regex = new RegExp(q.trim(), "i");
-//       filter.$or = [{ billNumber: regex }, { patientId: regex }];
-//     }
-
-//     const bills = await Bill.find(filter)
-//       .populate("patient", "firstName lastName phone age gender designation ageType patientId referringDoctor")
-//       .sort({ createdAt: -1 })
-//       .skip((page - 1) * limit)
-//       .limit(Number(limit));
-//     const total = await Bill.countDocuments(filter);
-
-//     return res.status(200).json({ bills, total });
-//   } catch (err) {
-//     console.error("getBills error:", err);
-//     res.status(500).json({ message: "Server error." });
-//   }
-// };
-
-// ═══════════════════════════════════════════════
-// GET /api/bills  — List bills for vendor
-//
-// Query params:
-//   q             free-text search (bill no, patient ID/name/phone,
-//                 test name, referring doctor)
-//   status        workflow status filter (pending/processing/completed/cancelled)
-//   paymentStatus NEW — payment status filter (paid/due/partial)
-//   from, to      billingDate range
-//   page, limit   pagination
-//
-// Response:
-//   { bills, hasMore, totals, paymentCounts }
-//   totals/paymentCounts are computed across the FULL filtered set
-//   (not just the current page) via a single aggregation with $facet.
-// ═══════════════════════════════════════════════
 exports.getBills = async (req, res) => {
   try {
     const {
@@ -208,7 +145,7 @@ exports.getBills = async (req, res) => {
       { $match: match },
       {
         $lookup: {
-          from: "patients", // confirm this matches your Patient model's actual collection name
+          from: "patients",
           localField: "patient",
           foreignField: "_id",
           as: "patientDoc",
@@ -273,9 +210,6 @@ exports.getBills = async (req, res) => {
               },
             },
           ],
-          // ── Counts per payment status — deliberately does NOT apply
-          //    paymentStatusStage, so the filter pills always show counts
-          //    for all statuses within the current search/date range.
           paymentCounts: [
             {
               $group: {

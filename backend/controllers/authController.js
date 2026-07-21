@@ -15,15 +15,7 @@ const signToken = (user) =>
     { expiresIn: "7d" }
   );
 
-// ════════════════════════════════════════════════════════
-//  REGISTER  —  POST /api/auth/register
-//  Accepts multipart/form-data because of logo upload.
-//  Flow:
-//    1. Generate vendorId early (multer uses it for filename)
-//    2. Multer middleware runs (see authRoutes)
-//    3. Hash password
-//    4. Create user with logo path
-// ════════════════════════════════════════════════════════
+
 exports.register = async (req, res) => {
   try {
     const { name, email, password, businessName, phone, address, city, state } = req.body;
@@ -48,7 +40,6 @@ exports.register = async (req, res) => {
     // ── Build logo object if file uploaded ────────────────
     let logoData = { path: "", originalName: "", mimeType: "" };
     if (req.file) {
-      // req.vendorId was set in route middleware (see authRoutes.js)
       const relativePath = `logos/${path.basename(req.file.path)}`;
       logoData = {
         path: relativePath,           // "logos/VND-3F8A1C2B.png"
@@ -59,7 +50,7 @@ exports.register = async (req, res) => {
 
     // ── Create user ───────────────────────────────────────
     const user = await User.create({
-      vendorId: req.vendorId, // set by middleware in authRoutes
+      vendorId: req.vendorId,
       name,
       email,
       password: hashedPassword,
@@ -70,7 +61,7 @@ exports.register = async (req, res) => {
       state: state || "",
       logo: logoData,
       role: "vendor",
-      status: "pending",   // admin must approve before login works
+      status: "pending",
     });
 
     return res.status(201).json({
@@ -208,8 +199,7 @@ exports.rejectVendor = async (req, res) => {
 };
 
 // ════════════════════════════════════════════════════════
-//  UPDATE LOGO  —  PATCH /api/auth/update-logo
-//  Lets an approved vendor update their logo later.
+//  UPDATE LOGO 
 // ════════════════════════════════════════════════════════
 exports.updateLogo = async (req, res) => {
   try {

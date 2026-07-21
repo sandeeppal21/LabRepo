@@ -28,11 +28,6 @@ exports.getProfile = async (req, res) => {
   }
 };
 
-// ═════════════════════════════════════════════════════════
-// PUT /api/profile/me
-// Handles both JSON (no logo) and multipart/form-data (with logo).
-// Multer is applied in the route — req.file is set if logo uploaded.
-// ═════════════════════════════════════════════════════════
 exports.updateProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
@@ -196,12 +191,7 @@ exports.changePassword = async (req, res) => {
   }
 };
 
-// ═════════════════════════════════════════════════════════
-// POST /api/profile/me/staff
-// Add a new doctor/technician. req.staffId is set by middleware
-// in the route (before multer) so the uploaded filename and the
-// new sub-document _id match.
-// ═════════════════════════════════════════════════════════
+
 exports.addStaffMember = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);

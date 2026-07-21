@@ -59,8 +59,6 @@ const userSchema = new mongoose.Schema(
       method: { type: String, default: "" },        // "bypass" for now, "razorpay" etc later
     },
 
-    // ── Lab staff — doctors / pathologists / technicians ────
-    // Printed on generated reports, each with their own signature.
     staff: [staffSchema],
 
     logo: {

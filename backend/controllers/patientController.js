@@ -1,5 +1,3 @@
-// backend/controllers/patientController.js
-
 const Patient = require("../models/patientModel");
 
 // ═══════════════════════════════════════════════
